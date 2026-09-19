@@ -58,7 +58,11 @@ jobs:
         run: |
           cp supplement/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
           cp supplement/patches/paper-*.patch    folia/folia-server/paper-patches/features/
-          git -C folia apply ../supplement/patches/deps-zstd.patch
+          # Build-file wiring (test srcDir + zstd dep) uses paperweight hunk
+          # convention stock git cannot parse -- spliced deterministically,
+          # byte-identical to the proven local build; aborts on upstream drift.
+          python3 supplement/scripts/apply-deps-hunk.py folia/folia-server/build.gradle.kts.patch
+          mkdir -p folia/folia-server/src/test/java/net/sexidium
           cp supplement/tests/*.java folia/folia-server/src/test/java/net/sexidium/
           git -C folia status --short | head -n 20
 

@@ -30,7 +30,8 @@ Pilot-ready, ANVIL-default. Rollback is a config flip (dual-read preserves
 git clone --branch ver/26.1.x --single-branch https://github.com/PaperMC/Folia.git folia
 cp folia-linear/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
 cp folia-linear/patches/paper-*.patch    folia/folia-server/paper-patches/features/
-git -C folia apply ../folia-linear/patches/deps-zstd.patch
+cp folia-linear/tests/*.java folia/folia-server/src/test/java/net/sexidium/
+python3 folia-linear/scripts/apply-deps-hunk.py folia/folia-server/build.gradle.kts.patch
 cp folia-linear/tests/*.java folia/folia-server/src/test/java/net/sexidium/
 
 # 2. Build (Java 25)
@@ -45,7 +46,9 @@ cd folia && ./gradlew applyAllPatches build folia-server:createPaperclipJar
 ## Layout
 
 - `patches/` — the fork: 0008/0009 paper config + tests, 0009/0010/0011 NMS
-  Linear core + dispatch + guards, `deps-zstd.patch` (zstd-jni dep).
+  Linear core + dispatch + guards; `scripts/apply-deps-hunk.py` wires the
+  test tree + zstd dep into Folia's patch file (paperweight hunk convention,
+  verified byte-identical to the proven build).
 - `tests/` — tests not already inside the patches (round-trip + NMS suite wiring).
 - `release/` — `rollback.sh` (rungs A/B/FORWARD with backup gates),
   operator notes, config templates.
