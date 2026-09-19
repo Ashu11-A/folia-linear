@@ -43,6 +43,20 @@ cd folia && ./gradlew applyAllPatches build folia-server:createPaperclipJar
 #   format: LINEAR
 ```
 
+## Contributing: preflight before push
+
+CI builds take ~10 minutes — don't spend them on staging bugs. Every change
+must pass the local mirror first (seconds, same checks as the CI preflight job):
+
+```bash
+scripts/preflight.sh            # inventory + hunk determinism + workflow self-checks
+scripts/preflight.sh --compile  # + fork compileJava (needs /tmp/sexidium-folia + network)
+scripts/preflight.sh --tests    # + Linear suites green
+```
+
+Rule: push only on preflight green. The CI `preflight` job enforces the same
+gates; the `build` job (full build + smokes + release attach) runs only after.
+
 ## Layout
 
 - `patches/` — the fork: 0008/0009 paper config + tests, 0009/0010/0011 NMS

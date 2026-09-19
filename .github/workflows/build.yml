@@ -16,7 +16,47 @@ env:
   JAVA_VERSION: 25
 
 jobs:
+  preflight:
+    # Fast-fail gate (minutes, no Gradle): proves the supplement stages cleanly
+    # before the slow build job burns 10+ minutes. Mirrors scripts/preflight.sh.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout supplement (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: supplement
+
+      - name: Clone pinned Folia base
+        run: git clone --branch ver/26.1.x --single-branch https://github.com/PaperMC/Folia.git folia && git -C folia rev-parse HEAD
+
+      - name: Stage patches (same commands as the build job)
+        run: |
+          cp supplement/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
+          cp supplement/patches/paper-*.patch    folia/folia-server/paper-patches/features/
+          python3 supplement/scripts/apply-deps-hunk.py folia/folia-server/build.gradle.kts.patch
+          mkdir -p folia/folia-server/src/test/java/net/sexidium
+          cp supplement/tests/*.java folia/folia-server/src/test/java/net/sexidium/
+          git -C folia status --short | head -n 20
+
+      - name: Workflow self-checks (catches the last two CI failures locally)
+        run: |
+          python3 - <<'EOF'
+          import sys
+          try:
+              import yaml
+              yaml.safe_load(open('supplement/.github/workflows/build.yml'))
+              print("YAML parse: OK")
+          except ImportError:
+              print("YAML parse: SKIPPED (no pyyaml on runner)")
+          EOF
+          echo "--- over-specific jar globs (must be empty):"
+          ! grep -rn 'folia-paperclip-26\.1\.2-\*' supplement/.github/workflows/build.yml
+          echo "--- gh invocations without explicit repo (must be empty):"
+          ! grep -rnE 'gh release (upload|create|edit|delete)' supplement/.github/workflows/build.yml | grep -v '\-\-repo'
+
   build:
+    needs: [preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -116,6 +156,7 @@ jobs:
         with:
           name: sexidium-folia-26.1.2
           path: folia/folia-server/build/libs/folia-paperclip-*.jar
+          if-no-files-found: error
 
       - name: Attach jar to GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -125,4 +166,4 @@ jobs:
           JAR=$(ls folia/folia-server/build/libs/folia-paperclip-*.jar | head -1)
           cp "$JAR" sexidium-folia-26.1.2.jar
           sha256sum sexidium-folia-26.1.2.jar | tee sexidium-folia-26.1.2.jar.sha256
-          gh release upload "${{ github.ref_name }}" sexidium-folia-26.1.2.jar sexidium-folia-26.1.2.jar.sha256 --clobber
+          gh release upload "${{ github.ref_name }}" sexidium-folia-26.1.2.jar sexidium-folia-26.1.2.jar.sha256 --repo Ashu11-A/folia-linear --clobber
