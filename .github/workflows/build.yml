@@ -85,22 +85,28 @@ jobs:
 
       - name: Boot smoke (ANVIL fresh world, expect Done)
         run: |
-          mkdir -p smoke-anvil && cd smoke-anvil
+          JAR=$(ls "$GITHUB_WORKSPACE/folia/folia-server/build/libs"/folia-paperclip-*.jar | head -1)
+          test -f "$JAR" || { echo "::error::paperclip jar missing:"; ls -la "$GITHUB_WORKSPACE/folia/folia-server/build/libs/" || true; exit 1; }
+          echo "JAR=$JAR"
+          mkdir -p "$GITHUB_WORKSPACE/smoke-anvil" && cd "$GITHUB_WORKSPACE/smoke-anvil"
           echo "eula=true" > eula.txt
           printf 'online-mode=false\nlevel-name=world\n' > server.properties
-          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot.log 2>&1 || true
+          timeout 300 java -jar "$JAR" --nogui > boot.log 2>&1 || true
           grep -q 'Done (' boot.log && echo SMOKE-ANVIL-DONE || (tail -n 40 boot.log; exit 1)
           grep -ciE '^\[.*ERROR\]' boot.log || true
 
       - name: Boot smoke (LINEAR flag, expect .linear emission)
         run: |
-          mkdir -p smoke-linear && cd smoke-linear
+          JAR=$(ls "$GITHUB_WORKSPACE/folia/folia-server/build/libs"/folia-paperclip-*.jar | head -1)
+          test -f "$JAR" || { echo "::error::paperclip jar missing:"; ls -la "$GITHUB_WORKSPACE/folia/folia-server/build/libs/" || true; exit 1; }
+          echo "JAR=$JAR"
+          mkdir -p "$GITHUB_WORKSPACE/smoke-linear" && cd "$GITHUB_WORKSPACE/smoke-linear"
           echo "eula=true" > eula.txt
           printf 'online-mode=false\nlevel-name=world\n' > server.properties
-          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot1.log 2>&1 || true
+          timeout 300 java -jar "$JAR" --nogui > boot1.log 2>&1 || true
           grep -q 'Done (' boot1.log || (tail -n 40 boot1.log; exit 1)
           printf 'region-format:\n  format: LINEAR\n' >> world/paper-world.yml
-          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot2.log 2>&1 || true
+          timeout 300 java -jar "$JAR" --nogui > boot2.log 2>&1 || true
           grep -q 'Done (' boot2.log || (tail -n 40 boot2.log; exit 1)
           find world -name '*.linear' | head -n 5
           test "$(find world -name '*.linear' | wc -l)" -gt 0 && echo SMOKE-LINEAR-EMITS || (echo "::warning::No .linear emitted (idle world writes nothing — see Loop-4 F2)"; exit 0)
