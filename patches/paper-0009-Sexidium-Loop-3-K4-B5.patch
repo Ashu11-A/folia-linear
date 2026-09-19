@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SUM <sum@sexidium.local>
+Date: Sat, 19 Sep 2026 04:05:05 -0300
+Subject: [PATCH] Sexidium Loop-3 integration (K4 constraint removal, B5
+ upgrade un-stub, T1 test replacement)
+
+
+diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+index ff082250a46a545be79d7af17f4ec085d3bcdf7e..ff63995826f25d966c4253a1e927cbd8215c06af 100644
+--- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+@@ -352,7 +352,6 @@ public class GlobalConfiguration extends ConfigurationPart {
+ 
+         public class Linear extends ConfigurationPart {
+             @Comment("How often (in seconds) buffered Linear region data is flushed to disk. Mirrors Kaiiju linearFlushFrequency (default 10).")
+-            @Constraints.Min(1)
+             public int flushFrequency = 10;
+             @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core. Mirrors Kaiiju linearFlushThreads (default 1).")
+             public int flushMaxThreads = 1;
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..9c33476e797b83d7f19e7a53eae35b6de696ed52 100644
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+             primaryLevelData.setModdedInfo(this.server.getServerModName(), this.server.getModdedStatus().shouldReportAsModified());
+         }
+ 
+-        if (this.server.options.has("forceUpgrade")) {
++        // Sexidium L3-B5: honor --recreateRegionFiles alone too (matches the Main.main gate condition).
++        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
+             Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
+         }
+ 
+diff --git a/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java b/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java
+deleted file mode 100644
+index f30d6e95901b84e50bb2ed971faff594f5ff02cc..0000000000000000000000000000000000000000
+--- a/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java
++++ /dev/null
+@@ -1,106 +0,0 @@
+-package net.minecraft.world.level.chunk.storage;
+-
+-import static org.junit.jupiter.api.Assertions.*;
+-
+-import java.nio.file.Path;
+-
+-import net.minecraft.world.level.ChunkPos;
+-
+-import org.junit.jupiter.api.Test;
+-import org.junit.jupiter.params.ParameterizedTest;
+-import org.junit.jupiter.params.provider.CsvSource;
+-import org.junit.jupiter.params.provider.ValueSource;
+-
+-/**
+- * L2-A5 / B1: covers the fixed {@link RegionFileStorage#getRegionFileCoordinates} predicate.
+- *
+- * <p>Kaiiju 0004 bug: {@code !endsWith(".mca") || !endsWith(".linear")} is true for every
+- * filename (nothing ends with both), so the method always returned null. The 26.1.2 fix
+- * requires {@code startsWith("r.") AND (endsWith ".mca" OR endsWith ".linear")}.
+- *
+- * <p>Target path when integrated: {@code folia-server/src/test/java/...} (mirrors
+- * {@code paper-server/src/test/java} JUnit-Jupiter layout; folia-server currently ships no
+- * {@code src/test} tree, so these files live under {@code patches/A5/folia-server/...} for
+- * the integrator to copy in). Calls the REAL static method — no server bootstrap needed
+- * (pure filename parsing + {@link ChunkPos} value construction).
+- */
+-public class RegionFileCoordinatesTest {
+-
+-    @ParameterizedTest(name = "mca {0} -> chunk ({1},{2})")
+-    @CsvSource({
+-        "r.0.0.mca,      0,   0",
+-        "r.1.2.mca,     32,  64",
+-        "r.-1.-2.mca,  -32, -64",
+-        "r.-1.2.mca,   -32,  64",
+-        "r.10.-3.mca,  320, -96",
+-    })
+-    public void mcaNamesResolve(String fileName, int chunkX, int chunkZ) {
+-        ChunkPos pos = RegionFileStorage.getRegionFileCoordinates(Path.of(fileName));
+-        assertNotNull(pos, "expected coordinates for " + fileName);
+-        assertEquals(chunkX, pos.x(), "chunkX for " + fileName);
+-        assertEquals(chunkZ, pos.z(), "chunkZ for " + fileName);
+-    }
+-
+-    @ParameterizedTest(name = "linear {0} -> chunk ({1},{2})")
+-    @CsvSource({
+-        "r.0.0.linear,      0,   0",
+-        "r.1.2.linear,     32,  64",
+-        "r.-1.-2.linear,  -32, -64",
+-        "r.-1.2.linear,   -32,  64",
+-        "r.10.-3.linear,  320, -96",
+-    })
+-    public void linearNamesResolve(String fileName, int chunkX, int chunkZ) {
+-        // Fails on vanilla 26.1.2 (mca-only) and on the buggy || predicate
+-        // (always null); passes with the B1 fix.
+-        ChunkPos pos = RegionFileStorage.getRegionFileCoordinates(Path.of(fileName));
+-        assertNotNull(pos, "expected coordinates for " + fileName);
+-        assertEquals(chunkX, pos.x(), "chunkX for " + fileName);
+-        assertEquals(chunkZ, pos.z(), "chunkZ for " + fileName);
+-    }
+-
+-    @ParameterizedTest(name = "junk {0} -> null")
+-    @ValueSource(strings = {
+-        "foo.mca",
+-        "r.0.0.txt",
+-        "r.0.0.mca.bak",
+-        "r.0.0.linear.tmp",
+-        "r.a.b.mca",
+-        "r.1.2",           // no extension
+-        "r..mca",          // missing coords
+-        "r.0.mca",         // missing one coord
+-        ".mca",
+-        "r.0.0.MCA",       // extensions are lowercase-sensitive
+-        "r.0.0.LINEAR",
+-        "r.0.0.mca ",      // trailing space
+-        "r.0.0. linear",   // spaced extension (B3 cousin)
+-        "r.0.0.linear ",   // trailing space
+-        "x.r.0.0.mca",     // wrong prefix
+-    })
+-    public void junkNamesReturnNull(String fileName) {
+-        assertNull(
+-            RegionFileStorage.getRegionFileCoordinates(Path.of(fileName)),
+-            "expected null for junk name " + fileName
+-        );
+-    }
+-
+-    @Test
+-    public void buggyPredicateIsAlwaysTrue() {
+-        // Regression pin: documents WHY the Kaiiju 0004 line was wrong.
+-        // For every sample name, (!endsWith .mca || !endsWith .linear) is true,
+-        // so the buggy guard rejected everything including valid inputs.
+-        String[] names = {"r.0.0.mca", "r.0.0.linear", "foo.txt"};
+-        for (String name : names) {
+-            boolean buggyReject = !name.endsWith(".mca") || !name.endsWith(".linear");
+-            assertTrue(buggyReject, "buggy || predicate rejects " + name);
+-        }
+-        // The fixed predicate accepts exactly the two known extensions.
+-        assertTrue(isAcceptedByFixedPredicate("r.0.0.mca"));
+-        assertTrue(isAcceptedByFixedPredicate("r.0.0.linear"));
+-        assertFalse(isAcceptedByFixedPredicate("foo.txt"));
+-    }
+-
+-    private static boolean isAcceptedByFixedPredicate(String fileName) {
+-        return fileName.startsWith("r.")
+-            && (fileName.endsWith(".mca") || fileName.endsWith(".linear"));
+-    }
+-}

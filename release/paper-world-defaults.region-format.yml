@@ -1,0 +1,7 @@
+# Ship default — paste into paper-world-defaults.yml (top level, NOT under `chunks`).
+# Sexidium-Folia Linear rollout: ANVIL default, opt-in per world.
+region-format:
+  format: ANVIL
+  linear:
+    compression-level: 1
+    crash-on-broken-symlink: true

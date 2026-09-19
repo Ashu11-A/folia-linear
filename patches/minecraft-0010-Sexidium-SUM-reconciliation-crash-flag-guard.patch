@@ -1,0 +1,274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SUM <sum@sexidium.local>
+Date: Sat, 19 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Sexidium SUM reconciliation (crash flag, guard sites, config
+ wiring)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Loop-2 integration deltas on top of 0009, per the SUM brief:
+(a) LinearRegionFile is final-content in 0009 (implements AbstractRegionFile,
+    explicit clear(), @Override marks) — no hunk here.
+(b) B2 guard kept verbatim (0009); here: linearCrashOnBrokenSymlink field +
+    6-arg ctor chain (storage/IOWorker/Simple/Entity/ChunkMap/PoiManager) +
+    the two guard call sites (existingOnly probe, write-path create).
+    Kaiiju-bug grep: no `|| !endsWith`, no executable `format.equals(`,
+    no `(linear | mca)` outside comments.
+(c) Deps: zstd-jni 1.5.6-8 in folia-server/build.gradle.kts (+ tracked
+    build.gradle.kts.patch hunk); lz4 NOT pinned (vanilla/mache supplies
+    net.jpountz.lz4; at.yawk 1.10.1 same package, single copy).
+(d) A7 config (paper-patches 0008): call sites read the EXACT A7 API
+    level.paperConfig().regionFormat.{format,linear.compressionLevel,
+    linear.crashOnBrokenSymlink}, mapped A7 enum -> net.sexidium enum.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+index ff747c43058e6b708b4831200d5c8fffd28bff5a..6e116511d36dcd3e9829523b348206c5fd39ad7d 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/io/datacontroller/EntityDataController.java
+@@ -67,10 +67,17 @@ public final class EntityDataController extends MoonriseRegionFileIO.RegionDataC
+         // Sexidium - L2-A4: format-aware entry point. The outer EntityDataController
+         // constructor is unchanged (it receives the already-built storage); ServerLevel
+         // threads the world format + linear compression through this overload.
++        // SUM: 6-arg overload adds the B2/A7 crash flag; 5-arg delegates with default true.
+         public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
+                                        final boolean dsync, final net.sexidium.RegionFileFormat format,
+                                        final int linearCompression) {
+-            super(regionStorageInfo, directory, dsync, format, linearCompression);
++            this(regionStorageInfo, directory, dsync, format, linearCompression, true);
++        }
++
++        public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
++                                       final boolean dsync, final net.sexidium.RegionFileFormat format,
++                                       final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++            super(regionStorageInfo, directory, dsync, format, linearCompression, linearCrashOnBrokenSymlink);
+         }
+ 
+         @Override
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index ad29f89dad666e8588f3962d59faf8d64dcc27a8..8d9b2b8c735c3f3b0008d56fc9902935fec1ba34 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -187,7 +187,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+         final int serverViewDistance,
+         final boolean syncWrites,
+         final net.sexidium.RegionFileFormat format, // Sexidium - L2-A4: world region format (A1 config wires the real value; ANVIL default at call site)
+-        final int linearCompression // Sexidium - L2-A4: linear zstd level
++        final int linearCompression, // Sexidium - L2-A4: linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Sexidium SUM: B2/A7 broken-symlink flag
+     ) {
+         super(
+             new RegionStorageInfo(levelStorage.getLevelId(), level.dimension(), "chunk"),
+@@ -196,7 +197,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             syncWrites,
+             DataFixTypes.CHUNK,
+             format, // Sexidium
+-            linearCompression // Sexidium
++            linearCompression, // Sexidium
++            linearCrashOnBrokenSymlink // Sexidium SUM
+         );
+         Path storageFolder = levelStorage.getDimensionPath(level.dimension());
+         this.storageName = storageFolder.getFileName().toString();
+@@ -234,7 +236,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+             level.getServer(),
+             level,
+             format, // Sexidium
+-            linearCompression // Sexidium
++            linearCompression, // Sexidium
++            linearCrashOnBrokenSymlink // Sexidium SUM
+         );
+         this.setServerViewDistance(serverViewDistance);
+         this.worldGenContext = new WorldGenContext(level, generator, structureManager, this.lightEngine, null, this::setChunkUnsaved); // Paper - rewrite chunk system
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index c3a7f8507cb5e8c16155604cdbb39f009acb81b9..ac809e988f0e7ef66fbef90bf39322cd79d8dd4f 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -215,6 +215,12 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+ 
+         this.savedDataStorage = savedDataStorage; // Paper - initialize SavedDataStorage earlier
+         this.ticketStorage = this.savedDataStorage.computeIfAbsent(TicketStorage.TYPE);
++        // Sexidium SUM (Loop-2 A7 wiring): per-world format from the exact A7 API
++        // (level.paperConfig().regionFormat.*); mapped A7 enum -> A4 storage enum.
++        final net.sexidium.RegionFileFormat sexidiumFormat = level.paperConfig().regionFormat.format == io.papermc.paper.configuration.type.RegionFileFormat.LINEAR
++            ? net.sexidium.RegionFileFormat.LINEAR : net.sexidium.RegionFileFormat.ANVIL;
++        final int sexidiumCompression = level.paperConfig().regionFormat.linear.compressionLevel;
++        final boolean sexidiumCrashOnBrokenSymlink = level.paperConfig().regionFormat.linear.crashOnBrokenSymlink;
+         this.chunkMap = new ChunkMap(
+             level,
+             levelStorage,
+@@ -229,8 +235,9 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+             this.ticketStorage,
+             viewDistance,
+             syncWrites,
+-            net.sexidium.RegionFileFormat.ANVIL, // Sexidium - L2-A4: default; A1 world config wires the real format here
+-            1 // Sexidium - L2-A4: linear compression default
++            sexidiumFormat,
++            sexidiumCompression,
++            sexidiumCrashOnBrokenSymlink
+         );
+         this.lightEngine = this.chunkMap.getLightEngine();
+         this.distanceManager = this.chunkMap.getDistanceManager();
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 2d0d192cc1b6d069f9af08eeeab65ec4005f1f78..e9acd2365f48cac58ec0135c26707c7232a9bc4d 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -691,8 +691,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 new RegionStorageInfo(levelStorage.getLevelId(), dimension, "entities"),
+                 levelStorage.getDimensionPath(dimension).resolve("entities"),
+                 server.forceSynchronousWrites(),
+-                net.sexidium.RegionFileFormat.ANVIL, // Sexidium - L2-A4: default; A1 world config wires the real format here
+-                1 // Sexidium - L2-A4: linear compression default
++                // Sexidium SUM (Loop-2 A7 wiring): exact A7 API, mapped to the A4 storage enum.
++                this.paperConfig().regionFormat.format == io.papermc.paper.configuration.type.RegionFileFormat.LINEAR
++                    ? net.sexidium.RegionFileFormat.LINEAR : net.sexidium.RegionFileFormat.ANVIL,
++                this.paperConfig().regionFormat.linear.compressionLevel,
++                this.paperConfig().regionFormat.linear.crashOnBrokenSymlink
+             ),
+             this.chunkTaskScheduler
+         );
+diff --git a/net/minecraft/world/entity/ai/village/poi/PoiManager.java b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+index 1141d354c56b84292214f5cb517329906ffbd67f..c4ed41a599b114f286c1613debafb358e52c4098 100644
+--- a/net/minecraft/world/entity/ai/village/poi/PoiManager.java
++++ b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
+@@ -183,13 +183,14 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> im
+         final ChunkIOErrorReporter errorReporter,
+         final LevelHeightAccessor levelHeightAccessor,
+         final net.sexidium.RegionFileFormat format, // Sexidium - L2-A4: threaded from ChunkMap (world config)
+-        final int linearCompression // Sexidium - L2-A4: linear zstd level
++        final int linearCompression, // Sexidium - L2-A4: linear zstd level
++        final boolean linearCrashOnBrokenSymlink // Sexidium SUM: B2/A7 broken-symlink flag
+     ) {
+         super(
+             // Sexidium - L2-A4: format-aware storage. Note 26.1.2 PoiManager HAS-A
+             // SimpleRegionStorage (built here), so unlike Kaiiju/1.20.1 no SectionStorage
+             // constructor change is needed.
+-            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK, format, linearCompression),
++            new SimpleRegionStorage(info, folder, fixerUpper, sync, DataFixTypes.POI_CHUNK, format, linearCompression, linearCrashOnBrokenSymlink),
+             PoiSection.Packed.CODEC,
+             PoiSection::pack,
+             PoiSection.Packed::unpack,
+diff --git a/net/minecraft/world/level/chunk/storage/IOWorker.java b/net/minecraft/world/level/chunk/storage/IOWorker.java
+index 49fada520f2eaa639b3d5b4e0c96375c776aad55..6fb24252984cffee376c62b106e5f37cf46aa5a9 100644
+--- a/net/minecraft/world/level/chunk/storage/IOWorker.java
++++ b/net/minecraft/world/level/chunk/storage/IOWorker.java
+@@ -41,8 +41,13 @@ public class IOWorker implements AutoCloseable, ChunkScanAccess {
+     }
+ 
+     // Sexidium - L2-A4: format-aware entry point (called by the SimpleRegionStorage overload).
++    // SUM: 6-arg overload adds the B2/A7 crash flag; 5-arg delegates with default true.
+     protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.sexidium.RegionFileFormat format, final int linearCompression) {
+-        this.storage = new RegionFileStorage(info, dir, sync, format, linearCompression);
++        this(info, dir, sync, format, linearCompression, true);
++    }
++
++    protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync, final net.sexidium.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink) {
++        this.storage = new RegionFileStorage(info, dir, sync, format, linearCompression, linearCrashOnBrokenSymlink);
+         this.consecutiveExecutor = new PriorityConsecutiveExecutor(IOWorker.Priority.values().length, Util.ioPool(), "IOWorker-" + info.type());
+     }
+ 
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 2e2acf070bc7fae55c0cec8f60a8f815d23541e6..4099ae9148ca61b50d74aa5c9f4933e7f053e373 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -36,8 +36,11 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     private final boolean sync;
+     // Sexidium - L2-A4: per-storage output format (Kaiiju 0004 shape). Defaults to ANVIL
+     // so every pre-existing construction site keeps vanilla behavior until A1 config is wired.
++    // SUM (Loop-2 integration): added linearCrashOnBrokenSymlink (A7 world key
++    // region-format.linear.crash-on-broken-symlink, default true) for the B2 guard.
+     public final RegionFileFormat format;
+     public final int compressionLevel;
++    public final boolean linearCrashOnBrokenSymlink;
+ 
+     // Paper start - recalculate region file headers
+     private final boolean isChunkData;
+@@ -98,6 +101,29 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             }
+         }
+     }
++    // Sexidium B2 - broken-symlink guard (correct-by-construction).
++    // Requires A4's Linear dispatch fields:
++    //   public final RegionFileFormat format;
++    //   public final boolean linearCrashOnBrokenSymlink;
++    // and import of RegionFileFormat (A4's enum, same constants as Kaiiju's
++    // dev.kaiijumc.kaiiju.region.RegionFileFormat: ANVIL, LINEAR).
++    // If A4 ported Kaiiju 0012 verbatim, the ONLY change needed inside an
++    // existing guard is the one-line fix marked below.
++    private void guardAgainstBrokenSymlinks(Path path) throws java.io.IOException {
++        if (!this.linearCrashOnBrokenSymlink) return;
++        // Sexidium B2 FIX: enum identity comparison. Kaiiju 0012 used
++        //   if (!this.format.equals("LINEAR")) return;
++        // which is always true (enum never equals a String) and disabled
++        // the guard. Correct form:
++        if (this.format != RegionFileFormat.LINEAR) return;
++        if (!java.nio.file.Files.isSymbolicLink(path)) return;
++        Path link = java.nio.file.Files.readSymbolicLink(path);
++        if (!java.nio.file.Files.exists(link) || !java.nio.file.Files.isReadable(link)) {
++            LOGGER.error("Linear region file {} is a broken symbolic link, crashing to prevent data loss", path);
++            net.minecraft.server.MinecraftServer.getServer().halt(false);
++            throw new java.io.IOException("Linear region file " + path + " is a broken symbolic link, crashing to prevent data loss");
++        }
++    }
+ 
+     @Override
+     public final boolean moonrise$doesRegionFileNotExistNoIO(final int chunkX, final int chunkZ) {
+@@ -146,6 +172,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+         FileUtil.createDirectoriesSafe(this.folder);
+ 
++        this.guardAgainstBrokenSymlinks(regionPath); // Sexidium B2 - existingOnly probe call site
+         ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Sexidium - open in probed format
+ 
+         this.regionCache.putAndMoveToFirst(key, ret);
+@@ -324,9 +351,15 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+     // Sexidium - L2-A4: format-aware entry point. RegionStorageInfo is deliberately
+     // left unchanged (Paper's dfuType hack + record shape); format rides alongside it.
++    // SUM: 6-arg overload adds the B2/A7 crash flag; 5-arg delegates with default true.
+     protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync, final RegionFileFormat format, final int compressionLevel) {
++        this(info, folder, sync, format, compressionLevel, true);
++    }
++
++    protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync, final RegionFileFormat format, final int compressionLevel, final boolean linearCrashOnBrokenSymlink) {
+         this.format = format;
+         this.compressionLevel = compressionLevel;
++        this.linearCrashOnBrokenSymlink = linearCrashOnBrokenSymlink;
+         this.folder = folder;
+         this.sync = sync;
+         this.info = info;
+@@ -359,6 +392,7 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+ 
+             FileUtil.createDirectoriesSafe(this.folder);
+ 
++            this.guardAgainstBrokenSymlinks(regionPath); // Sexidium B2 - write-path creation call site
+             ret = AbstractRegionFileFactory.get(regionPath, this.info, this.folder, this.sync, this.compressionLevel); // Sexidium - factory dispatch
+ 
+             this.regionCache.putAndMoveToFirst(key, ret);
+diff --git a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+index b8cffaa60fdbde1146e464f61c984b1408bf0efd..6b4587a66bc07f380d14a36eba53e63f37fe5489 100644
+--- a/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SimpleRegionStorage.java
+@@ -40,14 +40,22 @@ public class SimpleRegionStorage implements ca.spottedleaf.moonrise.patches.chun
+     // Sexidium - L2-A4: format-aware entry point. ChunkMap/PoiManager thread the world
+     // format + linear compression through here into IOWorker/RegionFileStorage.
+     // RegionStorageInfo itself is unchanged (Paper dfuType hack + record shape).
++    // SUM: 7-arg overload adds the B2/A7 crash flag; 6-arg delegates with default true.
+     public SimpleRegionStorage(
+         final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
+         final net.sexidium.RegionFileFormat format, final int linearCompression
++    ) {
++        this(info, folder, fixerUpper, syncWrites, dataFixType, format, linearCompression, true);
++    }
++
++    public SimpleRegionStorage(
++        final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType,
++        final net.sexidium.RegionFileFormat format, final int linearCompression, final boolean linearCrashOnBrokenSymlink
+     ) {
+         info.dfuType()[0] = dataFixType; // Paper - crazy hack to indicate what type the region file is
+         this.fixerUpper = fixerUpper;
+         this.dataFixType = dataFixType;
+-        this.storage = new IOWorker(info, folder, syncWrites, format, linearCompression).storage; // Paper - rewrite chunk system // Sexidium - format
++        this.storage = new IOWorker(info, folder, syncWrites, format, linearCompression, linearCrashOnBrokenSymlink).storage; // Paper - rewrite chunk system // Sexidium - format
+     }
+ 
+     public boolean isOldChunkAround(final ChunkPos pos, final int range) {

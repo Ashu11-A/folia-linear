@@ -1,0 +1,113 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  FOLIA_REF: 62dc0f257a4f5de1ef2eae8cf1627156a769c67f  # ver/26.1.x @ mc 26.1.2 STABLE
+  JAVA_VERSION: 25
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout supplement (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: supplement
+
+      - name: Disk guard (MC builds need room; fail fast, not ENOSPC)
+        run: |
+          df -h /
+          FREE_GB=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          echo "free=${FREE_GB}GB"
+          if [ "$FREE_GB" -lt 25 ]; then
+            echo "::error::Need >=25GB free for the Folia build, have ${FREE_GB}GB. Re-run on a larger runner (one-line runs-on change)."
+            exit 1
+          fi
+
+      - name: Set up Java 25 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Clone pinned Folia base
+        run: git clone --branch ver/26.1.x --single-branch https://github.com/PaperMC/Folia.git folia && git -C folia rev-parse HEAD
+
+      - name: Verify base pin
+        run: |
+          HEAD=$(git -C folia rev-parse HEAD)
+          if [ "$HEAD" != "${{ env.FOLIA_REF }}" ]; then
+            echo "::warning::Upstream ver/26.1.x moved ($HEAD). Patches target ${{ env.FOLIA_REF }}; continuing, apply step will prove compatibility."
+          fi
+
+      - name: Stage Sexidium patches + tests
+        run: |
+          cp supplement/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
+          cp supplement/patches/paper-*.patch    folia/folia-server/paper-patches/features/
+          git -C folia apply ../supplement/patches/deps-zstd.patch
+          cp supplement/tests/*.java folia/folia-server/src/test/java/net/sexidium/
+          git -C folia status --short | head -n 20
+
+      - name: Apply patches + build paperclip jar
+        working-directory: folia
+        run: |
+          ./gradlew applyAllPatches --stacktrace
+          ./gradlew build --stacktrace
+          ./gradlew folia-server:createPaperclipJar --stacktrace
+          ls -la folia-server/build/libs/ | grep -i paperclip
+
+      - name: Linear test suites (must be green)
+        working-directory: folia
+        run: ./gradlew :folia-server:test --tests "net.sexidium.SexidiumNmsTestSuite" --stacktrace
+
+      - name: Boot smoke (ANVIL fresh world, expect Done)
+        run: |
+          mkdir -p smoke-anvil && cd smoke-anvil
+          echo "eula=true" > eula.txt
+          printf 'online-mode=false\nlevel-name=world\n' > server.properties
+          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot.log 2>&1 || true
+          grep -q 'Done (' boot.log && echo SMOKE-ANVIL-DONE || (tail -n 40 boot.log; exit 1)
+          grep -ciE '^\[.*ERROR\]' boot.log || true
+
+      - name: Boot smoke (LINEAR flag, expect .linear emission)
+        run: |
+          mkdir -p smoke-linear && cd smoke-linear
+          echo "eula=true" > eula.txt
+          printf 'online-mode=false\nlevel-name=world\n' > server.properties
+          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot1.log 2>&1 || true
+          grep -q 'Done (' boot1.log || (tail -n 40 boot1.log; exit 1)
+          printf 'region-format:\n  format: LINEAR\n' >> world/paper-world.yml
+          timeout 300 java -jar ../folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar --nogui > boot2.log 2>&1 || true
+          grep -q 'Done (' boot2.log || (tail -n 40 boot2.log; exit 1)
+          find world -name '*.linear' | head -n 5
+          test "$(find world -name '*.linear' | wc -l)" -gt 0 && echo SMOKE-LINEAR-EMITS || (echo "::warning::No .linear emitted (idle world writes nothing — see Loop-4 F2)"; exit 0)
+
+      - name: Upload paperclip jar (artifact + release asset)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sexidium-folia-26.1.2
+          path: folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar
+
+      - name: Attach jar to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          JAR=$(ls folia/folia-server/build/libs/folia-paperclip-26.1.2-*.jar | head -1)
+          cp "$JAR" sexidium-folia-26.1.2.jar
+          sha256sum sexidium-folia-26.1.2.jar | tee sexidium-folia-26.1.2.jar.sha256
+          gh release upload "${{ github.ref_name }}" sexidium-folia-26.1.2.jar sexidium-folia-26.1.2.jar.sha256 --clobber

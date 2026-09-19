@@ -1,0 +1,14 @@
+--- a/folia-server/build.gradle.kts.patch
++++ b/folia-server/build.gradle.kts.patch
+@@ -157,6 +_,11 @@ dependencies {
+     // Spark
+     implementation("me.lucko:spark-api:0.1-20240720.200737-2")
+     implementation("me.lucko:spark-paper:1.10.152")
++
++    // Sexidium-Folia A6 (codec/native owner): zstd chunk codec. Pinned to the proven
++    // Sexidium plugin classpath (packages/core uses 1.5.6-8); the fork pins no zstd
++    // version itself and lz4 arrives via vanilla, so no lz4 line is added here.
++    implementation("com.github.luben:zstd-jni:1.5.6-8")
+ }
+ 
+ tasks.jar {
