@@ -66,6 +66,11 @@ jobs:
           cp supplement/tests/*.java folia/folia-server/src/test/java/net/sexidium/
           git -C folia status --short | head -n 20
 
+      - name: Set git identity (paperweight applies patches via git am)
+        run: |
+          git config --global user.name "folia-linear-ci"
+          git config --global user.email "folia-linear-ci@users.noreply.github.com"
+
       - name: Apply patches + build paperclip jar
         working-directory: folia
         run: |
