@@ -43,14 +43,17 @@ server code, not a plugin jar). If the assumed save path moved, adapt the
 wiring, not the bridge contract.
 
 diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java
-index 0000000..1111111 100644
+index 3deca0b..15a52cd 100644
 --- a/src/main/java/io/papermc/paper/command/PaperCommands.java
 +++ b/src/main/java/io/papermc/paper/command/PaperCommands.java
-@@ -10,4 +10,5 @@
-     static {
-         COMMANDS.put("tps", new TPSCommand("tps"));
+@@ -25,6 +25,7 @@ public final class PaperCommands {
+         COMMANDS.put("paper", new PaperCommand("paper"));
+         COMMANDS.put("mspt", new MSPTCommand("mspt"));
+         COMMANDS.put("tps", new io.papermc.paper.threadedregions.commands.CommandServerHealth()); // Folia - region threading
 +        COMMANDS.put("linearstats", new CommandLinearStats("linearstats")); // Sexidium linearstats (A1 assumed tps anchor; adapt if brigadier-only)
-     }
+         COMMANDS.put("profiler", new io.papermc.paper.threadedregions.commands.CommandProfiler()); // Folia - region threading - profiler
+ 
+         COMMANDS.forEach((s, command) -> {
  
 diff --git a/src/main/java/io/papermc/paper/command/CommandLinearStats.java b/src/main/java/io/papermc/paper/command/CommandLinearStats.java
 new file mode 100644

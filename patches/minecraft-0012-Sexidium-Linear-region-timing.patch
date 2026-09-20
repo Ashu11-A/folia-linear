@@ -634,7 +634,7 @@ index af2fdcf..b2c3d4e5f 100644
              final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
  
              if (this.regionCache.size() >= cacheSize) {
-@@ -545,20 +573,36 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -558,6 +586,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
                      NbtIo.write(value, output);
                  }
                  byte[] linearBytes = linearBuffer.toByteArray();
@@ -649,21 +649,10 @@ index af2fdcf..b2c3d4e5f 100644
                  // Sexidium L3-B4 (Q4): same pre-check as the Moonrise path above;
                  // vanilla parity is delete + log (cf. the anvil
                  // catch(RegionFileSizeException) arm). The slot clear persists on
-                 // the next flushDirty()/eviction (deferred linear durability).
-                 if (linearBytes.length > net.sexidium.LinearRegionFile.MAX_CHUNK_SIZE) {
-                     region.clear(pos);
-                     final int maxSize = net.sexidium.LinearRegionFile.MAX_CHUNK_SIZE / (1024 * 1024);
-                     LOGGER.error("Chunk at (" + pos.x() + "," + pos.z() + ") in regionfile '" + this.folder.resolve(getRegionFileName(pos.x(), pos.z(), this.format)) + "' exceeds max size of " + maxSize + "MiB, it has been deleted from disk.");
-                     LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
-                 } else {
-                     JvmProfiler.INSTANCE.onRegionFileWrite(this.info, pos, RegionFileVersion.DEFAULT, linearBytes.length);
-                     region.write(pos, ByteBuffer.wrap(linearBytes));
-                     LinearFlushCoordinator.forFolder(this.folder).markDirty(region);
-                 }
-             }
+@@ -576,6 +612,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
          }
      }
-+
+ 
 +    /**
 +     * Sexidium linearstats: folder snapshot pull-through (zero new fields;
 +     * delegates to the per-folder coordinator). NMS stays Bukkit-free.
@@ -671,3 +660,7 @@ index af2fdcf..b2c3d4e5f 100644
 +    public net.sexidium.LinearRegionTimings.LinearFolderSnapshot sexidium$stats() {
 +        return net.sexidium.LinearFlushCoordinator.forFolder(this.folder).snapshot();
 +    }
++
+     @Override
+     public void close() throws IOException {
+         // Paper start - rewrite chunk system
