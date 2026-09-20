@@ -20,7 +20,9 @@ identical boot/save walls, zero chunk diffs across 39k+ audited chunks,
 
 Live SMP rollout (2026-09-19, ~3.05M chunks): **24.99 GiB → 16.57 GiB
 (8.42 GiB, 33.7% saved)** — per-dimension breakdown and method in
-`docs/folia-linear-savings-evidence.md`.
+`docs/folia-linear-savings-evidence.md`. Rewritten at max level
+(2026-09-20): **16.57 GiB → 11.04 GiB (5.54 GiB, 33.4% further,
+55.8% vs ANVIL)** — same doc.
 
 ## Status
 
