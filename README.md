@@ -38,7 +38,6 @@ cp folia-linear/patches/minecraft-*.patch folia/folia-server/minecraft-patches/f
 cp folia-linear/patches/paper-*.patch    folia/folia-server/paper-patches/features/
 cp folia-linear/tests/*.java folia/folia-server/src/test/java/net/sexidium/
 python3 folia-linear/scripts/apply-deps-hunk.py folia/folia-server/build.gradle.kts.patch
-cp folia-linear/tests/*.java folia/folia-server/src/test/java/net/sexidium/
 
 # 2. Build (Java 25)
 cd folia && ./gradlew applyAllPatches build folia-server:createPaperclipJar
@@ -66,10 +65,16 @@ gates; the `build` job (full build + smokes + release attach) runs only after.
 ## Layout
 
 - `patches/` — the fork: 0008/0009 paper config + tests, 0009/0010/0011 NMS
-  Linear core + dispatch + guards; `scripts/apply-deps-hunk.py` wires the
+  Linear core + dispatch + guards, `minecraft-0012` timing (`L1-TIMING`,
+  lock-free read/write/flush/load + `sexidium$stats`/`snapshots`) +
+  `paper-0010` linearstats (`L2-STATS`, `/linearstats` + ASYNC flush event +
+  shared folder helper); `scripts/apply-deps-hunk.py` wires the
   test tree + zstd dep into Folia's patch file (paperweight hunk convention,
   verified byte-identical to the proven build).
-- `tests/` — tests not already inside the patches (round-trip + NMS suite wiring).
+- `tests/` — tests not already inside the patches: `LinearRegionFileRoundTripTest.java`
+  (round-trip) + `SexidiumNmsTestSuite.java` (suite wiring) +
+  `LinearTimingInstrumentationTest.java` (`L1-TIMING` counts/timings) +
+  `LinearStatsCommandTest.java` (`L2-STATS` snapshots/deltas/`P1` flush granularity).
 - `release/` — `rollback.sh` (rungs A/B/FORWARD with backup gates),
   operator notes, config templates.
 - `docs/` — per-loop engineering reports (research → validation), plus

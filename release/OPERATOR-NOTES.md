@@ -67,6 +67,52 @@ and a verified backup within reach before touching any flag.
 | `MCC-AUDIT: <n> .mcc sidecar(s) ... SKIPPED` (converter stderr) | Anvil-side oversize sidecars present; converter skips them loudly | Confirm sidecars are carried alongside any manual copy; linear write path has no `.mcc` handling |
 | `ERROR converting <path>: ...` (converter) | Per-file conversion failure | Live tree untouched; fix the file (often zero-byte) and re-run |
 
+### 3d. `linearstats` readout (L1-TIMING/L2-STATS, observability only)
+
+- Command syntax: `/linearstats` (no args; empty `tabComplete`). Permission
+  `sexidium.command.linearstats` defaults to OP, mirrored from `tps` in code;
+  if the base declares `tps` in `permissions.yml`/default-OP instead, mirror
+  `sexidium.command.linearstats` there too (see `CommandLinearStats` javadoc).
+- Denial path: without the permission the sender gets
+  `You do not have permission to use linearstats.` and no rows (`execute`
+  returns `false` via `testPermission`; **denied = message only, no stats**).
+- No-data line: `linearstats: no Linear folders tracked (no linear I/O yet).`
+  (**expected** on ANVIL-only nodes with no `.linear` I/O yet — not an error).
+
+| Field | Where | What proves what |
+|---|---|---|
+| Per-folder row | `%s [%s]: read=%d (avg %d us) write=%d (avg %d us) flush=%d (avg %d us) load=%d filesFlushed=%d dirtyDepth=%d failures=%d` (`world` [`folderType`]) | Pull-only via `LinearFlushCoordinator.snapshots()` / `RegionFileStorage#sexidium$stats()`; `folderType` pinned to `region\|poi\|entities` via `SexidiumLinearFolderNames` (default `region`); `world` is the parent dir name (`.../<world>/<type>`) |
+| `TOTALS` row | `TOTALS: read=%d (avg %d us) write=%d (avg %d us) flush=%d (avg %d us) load=%d filesFlushed=%d failures=%d folders=%d` (avgs are `totalMicros/total`, `0` when `0`) | Folder-wide aggregation across `region/`, `poi/`, `entities/`; `folders` is the snapshot map size |
+| `dirtyDepth` | Per-folder row only (not in `TOTALS`) | Coordinator `dirty` set size under lock (pending flush depth) |
+| `failures` / `filesFlushed` | Both row and `TOTALS` | `failures` counts `flushOne` retries; `filesFlushed` counts only `ok` flushes (failures tighten it; clean-no-op flushes record nothing via `didIo`) |
+
+- Event contract: `org.bukkit.event.world.LinearRegionFlushCompletedEvent` is
+  **ASYNC** (`super(true)`, fired OFF IO threads via the async scheduler,
+  Folia-safe: never on the Moonrise IO thread). Flush-granularity: once per
+  coordinator `flushDirty()` that attempted `>=1` file (clean-no-op flushes
+  fire nothing). Carries `worldName`/`folderType` (`region|poi|entities`) plus
+  post-flush `totals` snapshot. Listeners run async and **MUST NOT** touch
+  world state directly; schedule back via the region scheduler if needed.
+  Sample (5 lines, log-only):
+
+```java
+@EventHandler
+public void onLinearFlush(LinearRegionFlushCompletedEvent e) {
+    // Async: do not touch world state here; schedule back if needed.
+    getLogger().info(e.getWorldName() + "[" + e.getFolderType() + "] flushed=" + e.getFilesFlushed());
+}
+```
+
+- Troubleshooting: no rows but `.linear` exists → check the Paper-side save-path
+  wiring (`SexidiumLinearFlushBridge#notifyFlush(Plugin,String,long,long)`
+  ships **NO** call site in the patch; integrator must wire it after
+  `LinearFlushCoordinator.flushDirty()` in world save — unwired bridges mean
+  the command still works (pull-only) but the event never fires); event never
+  fires on idle → **expected** (clean-no-ops fire nothing); `folderType`
+  shows `region` for `poi/`/`entities/` → check the absolute folder-path suffix
+  (`SexidiumLinearFolderNames` inference); permission denied → grant OP or
+  `sexidium.command.linearstats`.
+
 ## 4. Known limitations (do NOT represent otherwise)
 
 1. **Hot-read/write p99 unmeasured.** No live timings/spark comparison has been

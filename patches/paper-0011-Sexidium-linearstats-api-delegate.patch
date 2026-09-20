@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SUM <sum@sexidium.local>
+Date: Sat, 20 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Sexidium linearstats API delegate (L2-STATS)
+
+Loop-2 Stage 2 (SUM): Paper-API delegate so plugins can consume Linear
+stats WITHOUT net.sexidium imports.
+(1) SexidiumLinearStats (io.papermc.paper.linear): public final class with
+JDK-only DTO `FolderSnapshot(folderKey,folderType,worldName,reads,
+readMicrosAvg,writes,writeMicrosAvg,flushes,flushMicrosAvg,
+compressionLevel,filesFlushed,failures,dirtyNow)` + `snapshots()` /
+`snapshot(folderKey)` delegating to the NMS coordinator
+(`LinearFlushCoordinator.snapshots()` as read from minecraft-0012);
+mapping converts NMS `LinearFolderSnapshot` field by field
+(avg=total/count, guard divide-by-zero).
+(2) LinearRegionFlushCompletedEvent (io.papermc.paper.event.linear):
+ASYNC super(true) flush-granularity event with primitive-only totals
+(no getTotals() NMS leak) + HandlerList + 5-line listener sample.
+(3) Bridge wiring note: `SexidiumLinearFlushBridge.notifyFlush`
+(from paper-0010) call-site assumed at the Paper-side save path after
+`flushDirty()` (integrator to wire; the bridge takes the explicit owning
+`Plugin` param — fixes the old getProvidingPlugin(Bridge.class) misuse).
+
+BASE-TREE ASSUMPTIONS (Folia base checkout absent locally at
+/tmp/sexidium-folia; all Paper hunks are written against stated assumed
+context and must be re-checked by the integrator — see return message):
+(C1) Coordinator method names as read from minecraft-0012: static
+`LinearFlushCoordinator.snapshots()` returns
+`Map<String, LinearRegionTimings.LinearFolderSnapshot>` (same key as
+BY_FOLDER: absolute folder-path string); instance `snapshot()` returns
+`LinearFolderSnapshot(read,write,flush,load,markDirty,filesFlushed,
+failures,oversizeRejects,evicts,cacheHits,cacheMisses,dirtyDepth)` where
+each timing group is `LinearTimings(count,totalMicros,maxMicros,
+avgMicros)`. There is NO static `snapshot(String)` in 0012, so the
+single-key `snapshot(folderKey)` here is `snapshots().get(folderKey)`
+(wired explicitly; if upstream adds a direct lookup, swap to it).
+(C2) Event package location: this patch places the primitive-only event at
+`io.papermc.paper.event.linear` (preferred Paper-native; avoids clashing
+with the paper-0010 `org.bukkit.event.world` event that carries NMS
+`getTotals()`). If the target base has no `io.papermc.paper.event` tree,
+relocate this file + package to `org.bukkit.event.world` (keep class name
++ primitive getters, keep super(true) + HandlerList).
+(C3) compressionLevel has NO per-folder source in the coordinator snapshot
+(it lives on RegionFileStorage/LinearRegionFile per 0009, clamped 1..22);
+the delegate reports `compressionLevel = 0` (unknown) until a per-folder
+source is wired. Do NOT fabricate a level from the timing snapshot.
+(C4) Requires paper-0010 (SexidiumLinearFolderNames + bridge): folderType/
+world reuse `SexidiumLinearFolderNames` (pinned region|poi|entities);
+bridge wiring: `notifyFlush(Plugin,String,long,long)` ships NO call site
+here — integrator must wire it into the Paper-side save path (e.g., after
+`LinearFlushCoordinator.flushDirty()` in world save), passing the owning
+`Plugin` explicitly (never getProvidingPlugin(Bridge.class); bridge is
+server code, not a plugin jar).
+(C5) dirtyNow maps to `LinearFolderSnapshot.dirtyDepth()` (int, lock-read
+depth); snapshots() map keys are absolute folder-path strings.
+(C6) No Bukkit lookups in NMS files (this patch is paper-side so Bukkit is
+OK here; this patch adds no lookups beyond Event/HandlerList types).
+
+diff --git a/src/main/java/io/papermc/paper/linear/SexidiumLinearStats.java b/src/main/java/io/papermc/paper/linear/SexidiumLinearStats.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..6666666666666666666666666666666666666666 100644
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/SexidiumLinearStats.java
+@@ -0,0 +1,139 @@
++package io.papermc.paper.linear;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import net.sexidium.LinearFlushCoordinator;
++import net.sexidium.LinearRegionTimings;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Sexidium linearstats API delegate (L2-STATS): JDK-only view for plugins.
++ *
++ * <p>Plugins must not import {@code net.sexidium} (NMS/coordinator types are
++ * server-internal and may move). This class is the single supported entry
++ * point: {@link #snapshots()} / {@link #snapshot(String)} return plain JDK
++ * DTOs ({@link FolderSnapshot} holds only String/long/int). Internally it
++ * delegates to {@code LinearFlushCoordinator.snapshots()} (static map, as
++ * read from minecraft-0012) and converts each
++ * {@code LinearRegionTimings.LinearFolderSnapshot} field by field; averages
++ * are {@code total/count} with a divide-by-zero guard (count==0 yields 0).
++ * Folder identity ({@code folderType}/{@code worldName}) reuses
++ * {@code SexidiumLinearFolderNames} from paper-0010 (requires that patch;
++ * {@code folderType} pinned to {@code region|poi|entities}).</p>
++ *
++ * <p>Pull-only, no threads, no storage fields, no NMS leaks: every public
++ * signature uses JDK types only (String/List/Optional/primitives + this
++ * DTO). The private mapping helper is the only place that names NMS types.
++ * Compression has no per-folder source in the coordinator snapshot (it lives
++ * on RegionFileStorage/LinearRegionFile per 0009), so this delegate reports
++ * {@code compressionLevel = 0} (unknown) until wired — see header C3.</p>
++ */
++public final class SexidiumLinearStats {
++
++    private SexidiumLinearStats() {
++    }
++
++    /**
++     * JDK-only folder snapshot (no {@code net.sexidium} in any component).
++     *
++     * @param folderKey absolute folder-path key (as in coordinator snapshots())
++     * @param folderType region|poi|entities (via SexidiumLinearFolderNames)
++     * @param worldName parent dir name (.../world/type)
++     * @param reads read op count
++     * @param readMicrosAvg avg read micros (total/count, 0 when reads==0)
++     * @param writes write op count
++     * @param writeMicrosAvg avg write micros (total/count, 0 when writes==0)
++     * @param flushes flush op count
++     * @param flushMicrosAvg avg flush micros (total/count, 0 when flushes==0)
++     * @param compressionLevel zstd level, or 0=unknown (no coordinator source; see class javadoc)
++     * @param filesFlushed files successfully flushed
++     * @param failures flush failures
++     * @param dirtyNow current dirty depth (coordinator dirtyDepth)
++     */
++    public record FolderSnapshot(
++        String folderKey,
++        String folderType,
++        String worldName,
++        long reads,
++        long readMicrosAvg,
++        long writes,
++        long writeMicrosAvg,
++        long flushes,
++        long flushMicrosAvg,
++        int compressionLevel,
++        long filesFlushed,
++        long failures,
++        int dirtyNow
++    ) {
++    }
++
++    /**
++     * Pull-only view: one DTO per tracked Linear folder.
++     *
++     * @return snapshots in folder-key order as returned by the coordinator map
++     */
++    public static @NotNull List<FolderSnapshot> snapshots() {
++        Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps;
++        try {
++            snaps = LinearFlushCoordinator.snapshots();
++        } catch (RuntimeException e) {
++            return List.of();
++        }
++        List<FolderSnapshot> out = new ArrayList<>(snaps.size());
++        for (Map.Entry<String, LinearRegionTimings.LinearFolderSnapshot> e : snaps.entrySet()) {
++            out.add(toSnapshot(e.getKey(), e.getValue()));
++        }
++        return out;
++    }
++
++    /**
++     * Single-folder lookup by absolute folder-path key.
++     *
++     * @param folderKey absolute folder-path key (as in snapshots())
++     * @return DTO when tracked, else empty
++     */
++    public static @NotNull Optional<FolderSnapshot> snapshot(final @NotNull String folderKey) {
++        Map<String, LinearRegionTimings.LinearFolderSnapshot> snaps;
++        try {
++            snaps = LinearFlushCoordinator.snapshots();
++        } catch (RuntimeException e) {
++            return Optional.empty();
++        }
++        LinearRegionTimings.LinearFolderSnapshot s = snaps.get(folderKey);
++        if (s == null) {
++            return Optional.empty();
++        }
++        return Optional.of(toSnapshot(folderKey, s));
++    }
++
++    // Private mapping: the ONLY place that names NMS types. Converts the NMS
++    // record field by field; avg = total/count with divide-by-zero guard.
++    private static @NotNull FolderSnapshot toSnapshot(final String folderKey, final LinearRegionTimings.LinearFolderSnapshot s) {
++        long reads = s.read().count();
++        long readAvg = s.read().count() == 0L ? 0L : s.read().totalMicros() / s.read().count();
++        long writes = s.write().count();
++        long writeAvg = s.write().count() == 0L ? 0L : s.write().totalMicros() / s.write().count();
++        long flushes = s.flush().count();
++        long flushAvg = s.flush().count() == 0L ? 0L : s.flush().totalMicros() / s.flush().count();
++        String folderType = SexidiumLinearFolderNames.inferFolderType(folderKey);
++        String worldName = SexidiumLinearFolderNames.inferWorld(folderKey);
++        // C3: no per-folder compression in the coordinator snapshot; 0=unknown.
++        int compressionLevel = 0;
++        return new FolderSnapshot(
++            folderKey,
++            folderType,
++            worldName,
++            reads,
++            readAvg,
++            writes,
++            writeAvg,
++            flushes,
++            flushAvg,
++            compressionLevel,
++            s.filesFlushed(),
++            s.failures(),
++            s.dirtyDepth());
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java b/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..7777777777777777777777777777777777777777 100644
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/event/linear/LinearRegionFlushCompletedEvent.java
+@@ -0,0 +1,123 @@
++package io.papermc.paper.event.linear;
++
++import org.bukkit.event.Event;
++import org.bukkit.event.HandlerList;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Sexidium linearstats: flush-completed event, Paper-native package (L2-STATS, ASYNC).
++ *
++ * <p>ASYNC contract: extends {@code Event} with {@code super(true)} and is
++ * fired OFF IO threads via the async scheduler (Folia-safe: never on the
++ * Moonrise IO thread). Listeners run async and MUST NOT touch world state
++ * directly; schedule back via the region scheduler if world access is needed.
++ * Fired once per coordinator {@code flushDirty()} that attempted {@code >=1}
++ * file (clean-no-op flushes fire nothing). Carries only JDK primitives +
++ * Strings (no NMS types; no NMS-typed totals accessor): per-flush
++ * identity plus primitive count/avg totals.</p>
++ *
++ * <p>Listener sample (5 lines, async-safe: log only, no world touch):</p>
++ * <pre>
++ * &#64;EventHandler
++ * public void onLinearFlush(LinearRegionFlushCompletedEvent e) {
++ *     // Async: do not touch world state here; schedule back if needed.
++ *     getLogger().info(e.getWorldName() + "[" + e.getFolderType() + "] flushed=" + e.getFilesFlushed());
++ * }
++ * </pre>
++ */
++public class LinearRegionFlushCompletedEvent extends Event {
++
++    private static final HandlerList HANDLERS = new HandlerList();
++
++    private final String worldName;
++    private final String folderType;
++    private final long filesFlushed;
++    private final long failures;
++    private final long elapsedMicros;
++    private final long readCount;
++    private final long readMicrosAvg;
++    private final long writeCount;
++    private final long writeMicrosAvg;
++    private final long flushCount;
++    private final long flushMicrosAvg;
++
++    public LinearRegionFlushCompletedEvent(
++        @NotNull String worldName,
++        @NotNull String folderType,
++        long filesFlushed,
++        long failures,
++        long elapsedMicros,
++        long readCount,
++        long readMicrosAvg,
++        long writeCount,
++        long writeMicrosAvg,
++        long flushCount,
++        long flushMicrosAvg
++    ) {
++        super(true); // Sexidium: ASYNC event (off-IO via async scheduler; see javadoc contract).
++        this.worldName = worldName;
++        this.folderType = folderType;
++        this.filesFlushed = filesFlushed;
++        this.failures = failures;
++        this.elapsedMicros = elapsedMicros;
++        this.readCount = readCount;
++        this.readMicrosAvg = readMicrosAvg;
++        this.writeCount = writeCount;
++        this.writeMicrosAvg = writeMicrosAvg;
++        this.flushCount = flushCount;
++        this.flushMicrosAvg = flushMicrosAvg;
++    }
++
++    public @NotNull String getWorldName() {
++        return this.worldName;
++    }
++
++    public @NotNull String getFolderType() {
++        return this.folderType;
++    }
++
++    public long getFilesFlushed() {
++        return this.filesFlushed;
++    }
++
++    public long getFailures() {
++        return this.failures;
++    }
++
++    public long getElapsedMicros() {
++        return this.elapsedMicros;
++    }
++
++    public long getReadCount() {
++        return this.readCount;
++    }
++
++    public long getReadMicrosAvg() {
++        return this.readMicrosAvg;
++    }
++
++    public long getWriteCount() {
++        return this.writeCount;
++    }
++
++    public long getWriteMicrosAvg() {
++        return this.writeMicrosAvg;
++    }
++
++    public long getFlushCount() {
++        return this.flushCount;
++    }
++
++    public long getFlushMicrosAvg() {
++        return this.flushMicrosAvg;
++    }
++
++    @Override
++    public @NotNull HandlerList getHandlers() {
++        return HANDLERS;
++    }
++
++    public static @NotNull HandlerList getHandlerList() {
++        return HANDLERS;
++    }
++}

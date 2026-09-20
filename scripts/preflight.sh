@@ -30,7 +30,8 @@ nope() { echo "FAIL: $1"; fail=$((fail+1)); }
 
 # 1. Inventory: every file CI references must exist.
 for f in patches/minecraft-*.patch patches/paper-*.patch tests/LinearRegionFileRoundTripTest.java \
-         tests/SexidiumNmsTestSuite.java scripts/apply-deps-hunk.py .github/workflows/build.yml; do
+         tests/SexidiumNmsTestSuite.java tests/LinearTimingInstrumentationTest.java \
+         tests/LinearStatsCommandTest.java scripts/apply-deps-hunk.py .github/workflows/build.yml; do
   # shellcheck disable=SC2086
   found=$(ls "$SUPPLEMENT_DIR"/$f 2>/dev/null | wc -l)
   [ "$found" -ge 1 ] && ok "inventory $f" || nope "inventory $f (missing)"

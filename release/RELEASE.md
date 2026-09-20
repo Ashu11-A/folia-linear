@@ -81,6 +81,8 @@ echo '3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c  folia-pa
 | `region-format.linear.flush-frequency` | `10` | **INERT this release** (declared, never read). Keep ≥ 1: `< 1` fails boot (`@Constraints.Min(1)` throws before fallback) |
 | `region-format.linear.flush-max-threads` | `1` | **INERT this release** (declared, never read) |
 
+`L1-TIMING`/`L2-STATS` add no config keys (no knob-table row; observability only).
+
 ## 5. Dry-run results (NON-server steps, executed 2026-09-19, no builds)
 
 All dry-runs were executed against the live files; the server itself was
