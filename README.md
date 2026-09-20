@@ -18,6 +18,10 @@ Measured on real SMP-like data (129 MB): **129 MB → 52 MB (59.6% saved)**,
 identical boot/save walls, zero chunk diffs across 39k+ audited chunks,
 9058 fork tests green.
 
+Live SMP rollout (2026-09-19, ~3.05M chunks): **24.99 GiB → 16.57 GiB
+(8.42 GiB, 33.7% saved)** — per-dimension breakdown and method in
+`docs/folia-linear-savings-evidence.md`.
+
 ## Status
 
 Pilot-ready, ANVIL-default. Rollback is a config flip (dual-read preserves
@@ -66,7 +70,8 @@ gates; the `build` job (full build + smokes + release attach) runs only after.
 - `tests/` — tests not already inside the patches (round-trip + NMS suite wiring).
 - `release/` — `rollback.sh` (rungs A/B/FORWARD with backup gates),
   operator notes, config templates.
-- `docs/` — per-loop engineering reports (research → validation).
+- `docs/` — per-loop engineering reports (research → validation), plus
+  `docs/folia-linear-savings-evidence.md` (live SMP numbers).
 - `.github/workflows/` — CI: pinned-base clone, patch apply, build, Linear
   suites, boot smoke, release asset.
 
