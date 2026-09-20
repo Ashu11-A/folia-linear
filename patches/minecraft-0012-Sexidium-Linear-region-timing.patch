@@ -185,12 +185,13 @@ index 58d427b..a1b2c3d4e 100644
          if (eldest != null) {
              this.flushOne(eldest);
          }
-@@ -103,15 +148,21 @@ public final class LinearFlushCoordinator {
+@@ -132,17 +159,23 @@ public final class LinearFlushCoordinator {
      private void flushOne(AbstractRegionFile file) {
          boolean ok = false;
          try {
              if (file.isMarkedToSave()) {
                  file.flush();
+             }
              // Cleared only after a successful flush; a write racing between
              // flush() and clear re-marks the file and is picked up next pass.
              file.clearMarkedToSave();
@@ -207,6 +208,7 @@ index 58d427b..a1b2c3d4e 100644
          if (!ok) {
              // Re-queue (bounded) so a transient failure is retried instead of
              // silently dropping durability. The flag was NOT cleared above,
+             // so no data is lost even if the re-queue itself overflows.
 @@ -125,4 +176,132 @@ public final class LinearFlushCoordinator {
              }
          }
@@ -572,7 +574,7 @@ diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/ne
 index af2fdcf..b2c3d4e5f 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-@@ -105,11 +105,21 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -131,12 +131,22 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
      @Override
      public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Sexidium - widened + dual-read probe
          final long key = ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
@@ -592,10 +594,11 @@ index af2fdcf..b2c3d4e5f 100644
 +            LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
 +        } catch (RuntimeException ignored) {
 +        }
-             this.regionCache.removeLast().close();
-         }
  
-@@ -205,6 +213,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+         if (!this.doesRegionFilePossiblyExist(key)) {
+             return null;
+         }
+@@ -205,6 +215,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              NbtIo.write(compound, linearOut);
              linearOut.close();
              final byte[] linearBytes = linearBuffer.toByteArray();
@@ -610,7 +613,7 @@ index af2fdcf..b2c3d4e5f 100644
              // Sexidium L3-B4 (Q4): linear oversize pre-check. Ownership split:
              // LinearRegionFile.write() enforces the cap invariant (throws); this
              // site decides behavior (DELETE + log, anvil parity). Early return
-@@ -341,9 +357,19 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+@@ -341,10 +359,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              final long key = ChunkPos.pack(pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT);
  
              AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
@@ -627,10 +630,11 @@ index af2fdcf..b2c3d4e5f 100644
 +                LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
 +            } catch (RuntimeException ignored) {
 +            }
-                 this.regionCache.removeLast().close();
-             }
  
-@@ -545,20 +575,36 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+             final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
+ 
+             if (this.regionCache.size() >= cacheSize) {
+@@ -545,20 +573,36 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
                      NbtIo.write(value, output);
                  }
                  byte[] linearBytes = linearBuffer.toByteArray();
