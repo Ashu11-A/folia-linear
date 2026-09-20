@@ -121,13 +121,17 @@ dirty, so no acknowledged write is lost.
 Kaiiju's implementation was the architectural reference. Three defects in it
 were identified during the port and corrected here:
 
-- A dual-read predicate using `||` where `&&` was required, which made the probe
-  accept paths it should have rejected.
-- An enum comparison by value where identity was intended, in the symlink guard.
-- A region-file regex written with a space inside the alternation
-  (`(linear | mca)`), which never matched `.linear` files during upgrade scans.
+- An extension predicate joining two `!endsWith` checks with `||`, which is
+  always true. The region-file lookup it guarded therefore always returned
+  null.
+- A symlink guard comparing a format enum against a string with `.equals`,
+  which is never true, so the guard was dead code.
+- An upgrader regex written as `(linear | mca)`, with a space inside the
+  alternation. It matched a literal `linear ` and so never matched a real
+  `.linear` file during upgrade scans.
 
-The port carries a grep gate for all three patterns so they cannot reappear.
+The port carries a grep gate for all three patterns (`|| !endsWith`,
+`format.equals(`, `(linear | mca)`) so they cannot reappear.
 
 ## Patch inventory
 
