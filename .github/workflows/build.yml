@@ -15,6 +15,7 @@ permissions:
 env:
   FOLIA_REF: 62dc0f257a4f5de1ef2eae8cf1627156a769c67f  # ver/26.1.x @ mc 26.1.2 STABLE
   JAVA_VERSION: 25
+  MC_VERSION: 26.1.2
 
 jobs:
   preflight:
@@ -150,12 +151,12 @@ jobs:
           timeout 300 java -jar "$JAR" --nogui > boot2.log 2>&1 || true
           grep -q 'Done (' boot2.log || (tail -n 40 boot2.log; exit 1)
           find world -name '*.linear' | head -n 5
-          test "$(find world -name '*.linear' | wc -l)" -gt 0 && echo SMOKE-LINEAR-EMITS || (echo "::warning::No .linear emitted (idle world writes nothing — see Loop-4 F2)"; exit 0)
+          test "$(find world -name '*.linear' | wc -l)" -gt 0 && echo SMOKE-LINEAR-EMITS || (echo "::warning::No .linear emitted (an idle world writes nothing)"; exit 0)
 
       - name: Upload paperclip jar (artifact + release asset)
         uses: actions/upload-artifact@v4
         with:
-          name: sexidium-folia-26.1.2
+          name: folia-linear-${{ env.MC_VERSION }}
           path: folia/folia-server/build/libs/folia-paperclip-*.jar
           if-no-files-found: error
 
@@ -164,7 +165,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Release asset name: folia-<mcversion>-<build>.jar, derived from the
+          # tag v<mcversion>-linear.<build>. The build number increments for
+          # each release of the same Minecraft version.
+          TAG="${{ github.ref_name }}"
+          case "$TAG" in
+            v*-linear.*)
+              MC="${TAG#v}"; MC="${MC%%-linear.*}"
+              BUILD="${TAG##*-linear.}"
+              ;;
+            *)
+              echo "::error::Tag '$TAG' does not match v<mcversion>-linear.<build>"
+              exit 1
+              ;;
+          esac
+          ASSET="folia-${MC}-${BUILD}.jar"
+          echo "asset=$ASSET"
           JAR=$(ls folia/folia-server/build/libs/folia-paperclip-*.jar | head -1)
-          cp "$JAR" sexidium-folia-26.1.2.jar
-          sha256sum sexidium-folia-26.1.2.jar | tee sexidium-folia-26.1.2.jar.sha256
-          gh release upload "${{ github.ref_name }}" sexidium-folia-26.1.2.jar sexidium-folia-26.1.2.jar.sha256 --repo Ashu11-A/folia-linear --clobber
+          cp "$JAR" "$ASSET"
+          sha256sum "$ASSET" | tee "$ASSET.sha256"
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --repo Ashu11-A/folia-linear --clobber

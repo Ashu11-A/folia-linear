@@ -89,8 +89,10 @@ workflow and `preflight.sh`:
 
 1. Preflight green, then push to `main`.
 2. Tag `v26.1.2-linear.N` and push the tag.
-3. The tag push triggers the build, which attaches `sexidium-folia-26.1.2.jar`
-   and its sha256 to the GitHub release.
+3. The tag push triggers the build, which attaches `folia-<mcversion>-<build>.jar`
+   and its sha256 to the GitHub release. Both names are derived from the tag,
+   so `v26.1.2-linear.3` produces `folia-26.1.2-3.jar`. A tag that does not
+   match `v<mcversion>-linear.<build>` fails the attach step on purpose.
 4. Update `CHANGELOG.md` in the same change that introduces the behaviour, not
    at tag time.
 

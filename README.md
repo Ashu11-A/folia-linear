@@ -65,8 +65,10 @@ dependency into Folia's own `build.gradle.kts.patch`. That file uses the
 paperweight hunk convention, which plain `git apply` cannot parse, hence the
 script. It aborts instead of guessing if the base file has drifted.
 
-Tagged pushes (`v*`) build on CI and attach `sexidium-folia-26.1.2.jar` plus its
-sha256 to the release.
+Tagged pushes (`v*`) build on CI and attach the release asset plus its sha256.
+Assets are named `folia-<mcversion>-<build>.jar`, where the build number
+increments for each release of the same Minecraft version, so the tag
+`v26.1.2-linear.3` produces `folia-26.1.2-3.jar`.
 
 ## Configuration
 

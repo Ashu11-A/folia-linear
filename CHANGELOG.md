@@ -4,6 +4,11 @@ Tags follow the base Minecraft version: `v26.1.2-linear.N`.
 
 ## Unreleased
 
+- Release assets renamed from `sexidium-folia-<mcversion>.jar` to
+  `folia-<mcversion>-<build>.jar`, where the build number increments for each
+  release of the same Minecraft version. The name is derived from the tag, so
+  `v26.1.2-linear.3` produces `folia-26.1.2-3.jar`. Assets on the three existing
+  releases were renamed to match, which changes their download URLs.
 - Documentation rewritten and reorganised by topic. The README now covers the
   region format selector and the zstd compression level, which were previously
   undocumented or buried.

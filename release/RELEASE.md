@@ -22,7 +22,7 @@ Referenced but not included:
 
 | Artifact | Where |
 |---|---|
-| Paperclip jar | Built locally, or downloaded from the GitHub release for a `v*` tag |
+| Paperclip jar | Built locally, or `folia-<mcversion>-<build>.jar` from the GitHub release for a `v*` tag |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
@@ -37,10 +37,11 @@ Referenced but not included:
 
 The reference build produced a 60,509,601 B paperclip jar with sha256
 `3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c`, reproducible
-byte for byte across rebuilds. The CI release asset is a different artifact
-(`sexidium-folia-26.1.2.jar`, 60,511,732 B) and therefore has a different sha.
-`rollback.sh --expected-sha` defaults to the local reference build; pass the
-sha of whichever jar you actually deployed.
+byte for byte across rebuilds. A CI release asset is a different artifact and
+therefore has a different sha: `folia-26.1.2-1.jar` is 60,511,732 B,
+`folia-26.1.2-3.jar` is 60,530,852 B. `rollback.sh --expected-sha` defaults to
+the local reference build, so pass the sha of whichever jar you actually
+deployed.
 
 ## 3. Install on a clean node
 
