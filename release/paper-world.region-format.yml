@@ -1,6 +1,10 @@
-# Per-world opt-in — paste into the target world's paper-world.yml ONLY
-# (e.g. config/worlds/<world>/paper-world.yml). Leave paper-world-defaults.yml at ANVIL.
-# Flip ONE low-risk world first (NOT spawn). Restart after editing.
+# Per-world opt-in - paste into the target world's paper-world.yml ONLY
+# (config/worlds/<world>/paper-world.yml). Leave paper-world-defaults.yml
+# on ANVIL.
+#
+# Flip one low-traffic world first, never spawn. Restart after editing.
+# Keep compression-level at 1 through the first soak cycle; it is a config
+# flip to raise it later, no conversion needed.
 region-format:
   format: LINEAR
   linear:

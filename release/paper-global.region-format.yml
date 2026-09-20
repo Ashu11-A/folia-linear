@@ -1,9 +1,11 @@
-# Global — paste into paper-global.yml (top level).
-# NOTE (CONFIG-MATRIX K4/K5): these two keys are DECLARED but UNWIRED in this
-# release — no NMS code reads them yet, so tuning them is a silent no-op.
-# Ship defaults; do NOT present them as tunable until the flusher lands.
-# Additional caveat (K4): flush-frequency carries @Constraints.Min(1), so a
-# value < 1 fails boot instead of falling back to 10. Keep at >= 1.
+# Global snippet - paste into paper-global.yml at the top level.
+#
+# Both keys below are INERT in this release: they are declared and validated,
+# but no code reads them yet, so changing them does nothing. They exist so the
+# config surface matches Kaiiju's and a future flush scheduler is a wiring
+# change rather than a config break.
+#
+# A value below 1 for flush-frequency logs an error and falls back to 10.
 region-format:
   linear:
     flush-frequency: 10
