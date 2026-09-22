@@ -1,0 +1,258 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-ci <folia-linear-ci@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 19:44:44 -0300
+Subject: [PATCH] Linear age-based flush + first-dirty ordering
+ (minecraft-0017)
+
+Loop-3 (agent 25): wire flush-frequency to a REAL age-based flush +
+switch markDirty to FIRST-dirty ordering (LinkedHashMap, no reorder on
+repeat marks). DELIBERATE behavior change (only one in the set):
+MAX_DIRTY victim changes least-recently-written -> longest-unflushed;
+strictly more correct, ship unconditionally.
+
+Age: flushDirty flushes only files with first-dirty age >= frequency
+seconds; evict forces all (unload must not lose young writes); pressure
+flush ignores age (bounds memory). Frequency from GlobalConfiguration
+(default 10s), test overrides for immediate flush.
+
+diff --git a/net/linear/LinearFlushCoordinator.java b/net/linear/LinearFlushCoordinator.java
+index 0629bef092543ea603a2fea61748ba5b21b5fd29..65a574fce3f6da8f6fd2e69163958b44e79409e8 100644
+--- a/net/linear/LinearFlushCoordinator.java
++++ b/net/linear/LinearFlushCoordinator.java
+@@ -2,8 +2,6 @@ package net.linear;
+ 
+ import java.nio.file.Path;
+ import java.util.ArrayList;
+-import java.util.Iterator;
+-import java.util.LinkedHashSet;
+ import java.util.List;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.atomic.LongAccumulator;
+@@ -36,19 +34,26 @@ import org.slf4j.LoggerFactory;
+  *       deadlocks). The caller always participates as a worker and joins
+  *       before returning, so {@code flushDirty()} remains a durability
+  *       barrier.</li>
+- *   <li><b>Bounded dirty set:</b> at most {@link #MAX_DIRTY} files are
+- *       tracked; the eldest is flushed inline (backpressure on the Moonrise
+- *       I/O thread) when the bound is exceeded. Duplicates coalesce because
+- *       the set is keyed by file identity.</li>
++ *   <li><b>Bounded dirty set, first-dirty order:</b> at most {@link #MAX_DIRTY}
++ *       files are tracked in a {@code LinkedHashMap} keyed by file identity
++ *       with first-dirty nanos; repeat marks do NOT reorder (minecraft-0017).
++ *       Exceeding the bound flushes the longest-unflushed file inline
++ *       (backpressure on the Moonrise I/O thread). DELIBERATE change from
++ *       least-recently-written victim to longest-unflushed; strictly more
++ *       correct.</li>
++ *   <li><b>Age-based flush:</b> {@code flushDirty()} flushes only files whose
++ *       first-dirty age {@code >=} global {@code flush-frequency} seconds
++ *       (minecraft-0017); younger files stay tracked. Eviction forces all.</li>
+  *   <li><b>Unload eviction:</b> {@code RegionFileStorage.close()} calls
+- *       {@link #evict(Path)}, which flushes remaining dirty files and drops
+- *       the registry entry so worlds do not leak coordinators.</li>
++ *       {@link #evict(Path)}, which force-flushes remaining dirty files and
++ *       drops the registry entry so worlds do not leak coordinators.</li>
+  * </ol>
+  *
+  * <p>Durability model: {@code LinearRegionFile.write()} marks the file via
+  * {@code isMarkedToSave()}; {@code RegionFileStorage} reports each write to
+- * {@link #markDirty}, and the actual bytes hit disk on the next
+- * {@link #flushDirty()} (world save), bound-pressure flush, or eviction.
++ * {@link #markDirty} (first-dirty timestamp kept), and the actual bytes hit
++ * disk on the next age-eligible {@link #flushDirty()} (world save),
++ * bound-pressure flush, or forced eviction.
+  * Polling uses the A3 contract ({@code isMarkedToSave()} is specified
+  * non-consuming; the flag is cleared only after a successful flush).</p>
+  */
+@@ -81,11 +86,12 @@ public final class LinearFlushCoordinator {
+     /**
+      * Flushes any remaining dirty files for {@code folder} and drops the
+      * registry entry. Called from {@code RegionFileStorage.close()}.
++     * Forces all files regardless of age (unload must not lose young writes).
+      */
+     public static void evict(Path folder) {
+         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
+         if (coordinator != null) {
+-            coordinator.flushDirty();
++            coordinator.flushDirty(true);
+             coordinator.recordEvict(); // Linear L1-TIMING: evict count (lock-free)
+         }
+     }
+@@ -121,7 +127,7 @@ public final class LinearFlushCoordinator {
+         FLUSH_THREADS_OVERRIDE_FOR_TESTS = threads;
+     }
+ 
+-    /** Test-only: shuts the shared pool down and clears the override. */
++    /** Test-only: shuts the shared pool down and clears the overrides. */
+     static void linear$resetFlushPoolForTests() {
+         synchronized (FLUSH_POOL_LOCK) {
+             if (FLUSH_POOL != null) {
+@@ -131,6 +137,34 @@ public final class LinearFlushCoordinator {
+             }
+             FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
+         }
++        FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
++    }
++
++    /**
++     * Linear - minecraft-0017: resolves flush-frequency seconds (global
++     * {@code region-format.linear.flush-frequency}, post-processed >=1).
++     * Null config yields 10 (documented default). Test override wins.
++     */
++    static long linear$resolveFlushFrequencySeconds() {
++        Long override = FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS;
++        if (override != null) {
++            return override;
++        }
++        try {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 10L;
++            }
++            return cfg.regionFormat.linear.flushFrequency;
++        } catch (RuntimeException e) {
++            return 10L;
++        }
++    }
++
++    /** Test-only: forces flush-frequency seconds (null clears). */
++    static void linear$setFlushFrequencyForTests(Long seconds) {
++        FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = seconds;
+     }
+ 
+     /**
+@@ -166,8 +200,15 @@ public final class LinearFlushCoordinator {
+     }
+ 
+     private final Path folder;
+-    /** Insertion-ordered identity set; guarded by {@code this}. */
+-    private final LinkedHashSet<AbstractRegionFile> dirty = new LinkedHashSet<>();
++    // Linear - minecraft-0017: FIRST-dirty ordering (LinkedHashMap, no reorder
++    // on repeat marks). Value is first-dirty nanos (System.nanoTime) for the
++    // age-based flush. DELIBERATE change from least-recently-written
++    // (remove+add tail) to longest-unflushed victim; strictly more correct.
++    // Guarded by {@code this}.
++    private final java.util.LinkedHashMap<AbstractRegionFile, Long> dirty = new java.util.LinkedHashMap<>();
++    // Linear - minecraft-0017: flush-frequency override for tests (null = read
++    // GlobalConfiguration). Seconds, >=1 post-processed; nanos derived.
++    private static volatile Long FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
+     // Linear L1-TIMING: lock-free folder-wide timing/counts. Hot updates use
+     // LongAdder/LongAccumulator only (no synchronized, no locks); dirtyDepth is
+     // the only value read under lock in snapshot().
+@@ -214,15 +255,25 @@ public final class LinearFlushCoordinator {
+      * Records a file with unflushed writes. Over-capacity evicts the eldest
+      * entry with an inline flush (backpressure on the caller, i.e. a Moonrise
+      * I/O thread), so write bursts cannot grow memory without bound.
++     *
++     * <p>Linear - minecraft-0017: FIRST-dirty ordering (no reorder on repeat
++     * marks). DELIBERATE change: the MAX_DIRTY victim is now the
++     * longest-unflushed file, not the least-recently-written one. A hot region
++     * rewritten every cycle keeps its original first-dirty timestamp and
++     * therefore becomes the pressure victim first, which is strictly more
++     * correct (oldest data at risk flushes first). Ship unconditionally.
+      */
+     public void markDirty(AbstractRegionFile file) {
+         AbstractRegionFile eldest = null;
+         synchronized (this) {
+-            this.dirty.remove(file);
+-            this.dirty.add(file);
++            if (!this.dirty.containsKey(file)) {
++                this.dirty.put(file, System.nanoTime());
++            }
++            // Repeat marks: no reorder, no timestamp refresh (first-dirty wins).
+             if (this.dirty.size() > MAX_DIRTY) {
+-                Iterator<AbstractRegionFile> it = this.dirty.iterator();
+-                eldest = it.next();
++                java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
++                    this.dirty.entrySet().iterator();
++                eldest = it.next().getKey();
+                 it.remove();
+             }
+         }
+@@ -233,18 +284,56 @@ public final class LinearFlushCoordinator {
+         }
+     }
+ 
+-    /** Flushes every tracked dirty file. Called from storage save/close. */
++    /** Flushes dirty files old enough per flush-frequency. Called from storage save. */
+     public void flushDirty() {
++        this.flushDirty(false);
++    }
++
++    /**
++     * Linear - minecraft-0017: REAL age-based flush behind flush-frequency.
++     * Only files whose first-dirty age {@code >=} frequency seconds are
++     * flushed; younger files stay tracked for the next save. {@code force}
++     * (evict/unload) flushes everything regardless of age.
++     */
++    void flushDirty(boolean force) {
+         if (this.isEmpty()) {
+             return;
+         }
++        final long now = System.nanoTime();
++        final long frequencyNanos;
++        if (force) {
++            frequencyNanos = 0L;
++        } else {
++            long seconds = linear$resolveFlushFrequencySeconds();
++            if (seconds < 0L) {
++                seconds = 10L;
++            }
++            frequencyNanos = seconds * 1_000_000_000L;
++        }
+         final List<AbstractRegionFile> snapshot;
+         synchronized (this) {
+             if (this.dirty.isEmpty()) {
+                 return;
+             }
+-            snapshot = new ArrayList<>(this.dirty);
+-            this.dirty.clear();
++            if (force) {
++                snapshot = new ArrayList<>(this.dirty.keySet());
++                this.dirty.clear();
++            } else {
++                snapshot = new ArrayList<>();
++                java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
++                    this.dirty.entrySet().iterator();
++                while (it.hasNext()) {
++                    java.util.Map.Entry<AbstractRegionFile, Long> e = it.next();
++                    long age = now - e.getValue();
++                    if (age >= frequencyNanos) {
++                        snapshot.add(e.getKey());
++                        it.remove();
++                    }
++                }
++                if (snapshot.isEmpty()) {
++                    return;
++                }
++            }
+         }
+         // Linear - minecraft-0016: <=1 keeps the pre-patch serial loop
+         // byte-identical (no pool, no futures, no extra branches in the loop).
+@@ -316,6 +405,14 @@ public final class LinearFlushCoordinator {
+         return this.dirty.size();
+     }
+ 
++    /**
++     * Linear - minecraft-0017: test-only view of first-dirty order (head =
++     * longest-unflushed). Returns files in dirty-set iteration order.
++     */
++    synchronized java.util.List<AbstractRegionFile> linear$dirtyOrderForTests() {
++        return new java.util.ArrayList<>(this.dirty.keySet());
++    }
++
+     private void flushOne(AbstractRegionFile file) {
+         boolean ok = false;
+         try {
+@@ -341,9 +438,10 @@ public final class LinearFlushCoordinator {
+             // Re-queue (bounded) so a transient failure is retried instead of
+             // silently dropping durability. The flag was NOT cleared above,
+             // so no data is lost even if the re-queue itself overflows.
++            // First-dirty ordering: keep original timestamp when present.
+             synchronized (this) {
+                 if (this.dirty.size() < MAX_DIRTY * 2) {
+-                    this.dirty.add(file);
++                    this.dirty.putIfAbsent(file, System.nanoTime());
+                 }
+             }
+         }

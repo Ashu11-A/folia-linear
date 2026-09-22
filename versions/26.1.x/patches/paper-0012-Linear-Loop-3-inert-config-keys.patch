@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 19:11:43 -0300
+Subject: [PATCH] Linear Loop-3 inert config keys (paper-0012)
+
+
+diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+index ff63995826f25d966c4253a1e927cbd8215c06af..00f5db8bfbfb5c2bbbbc2ba50e416c8c133217f0 100644
+--- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
+@@ -353,8 +353,14 @@ public class GlobalConfiguration extends ConfigurationPart {
+         public class Linear extends ConfigurationPart {
+             @Comment("How often (in seconds) buffered Linear region data is flushed to disk. Mirrors Kaiiju linearFlushFrequency (default 10).")
+             public int flushFrequency = 10;
+-            @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core. Mirrors Kaiiju linearFlushThreads (default 1).")
++            @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core. Mirrors Kaiiju linearFlushThreads (default 1). Inert unless >1: values <=1 keep the current serial flush path.")
+             public int flushMaxThreads = 1;
++            @Comment("Linear - compression workers for future parallel flush. 0 (default) is inert: flush stays serial on the caller. Positive values would size a worker pool once wired; no threads are spawned in this release.")
++            public int compressionWorkers = 0;
++            @Comment("Linear - long-distance chunk matching radius for future flush batching. 0 (default) disables it; no behaviour change while 0.")
++            public int longDistanceMatching = 0;
++            @Comment("Linear - log per-folder flush batches at info level. False (default) keeps current warn-only logging.")
++            public boolean logFlushBatches = false;
+ 
+             @PostProcess
+             private void postProcess() {
+@@ -368,6 +374,16 @@ public class GlobalConfiguration extends ConfigurationPart {
+                 } else {
+                     this.flushMaxThreads = Math.max(this.flushMaxThreads, 1);
+                 }
++                // Linear - inert-key clamps (defaults preserve today's serial behaviour; no @Constraints so fallbacks stay reachable).
++                if (this.compressionWorkers < 0) {
++                    LOGGER.error("[region-format] linear.compression-workers must be >= 0, got {}. Falling back to 0.", this.compressionWorkers);
++                    this.compressionWorkers = 0;
++                }
++                if (this.longDistanceMatching < 0) {
++                    LOGGER.error("[region-format] linear.long-distance-matching must be >= 0, got {}. Falling back to 0.", this.longDistanceMatching);
++                    this.longDistanceMatching = 0;
++                }
++                // Linear - logFlushBatches is boolean: no clamp needed (false = current warn-only logging).
+             }
+         }
+     }

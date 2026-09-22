@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear <folia-linear@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear unlock flush batch (minecraft-0013)
+
+Loop-3 (agent 22, standalone highest-confidence): stop holding the
+RegionFileStorage monitor across the flush batch (flush()/close() hunks).
+
+Verified safe (re-verified in applied tree): LinearFlushCoordinator
+flushDirty()/evict() touches only the coordinator dirty set -- never
+regionCache nor the negative cache (nonExistingRegionFiles) -- and
+AbstractRegionFile.flush()/close() touches only its own slots/file.
+Holding the monitor across a full-region zstd rewrite blocked all I/O
+on that folder; the batch now snapshots under lock and runs unlocked.
+
+diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+index 869c6c8..231aec0 100644
+--- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
++++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
+@@ -623,39 +623,53 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     @Override
+     public void close() throws IOException {
+         // Paper start - rewrite chunk system
++        // Linear - L3-0013: snapshot under the monitor, close outside it.
++        // Verified safe: LinearFlushCoordinator.evict/flushDirty touches only
++        // the coordinator dirty set (never regionCache nor the negative cache),
++        // and AbstractRegionFile.close() touches only its own slots/file.
++        // Holding the monitor across a level-22 close (full-region zstd rewrite)
++        // blocked all I/O on this folder; eviction close now runs unlocked.
++        final java.util.List<AbstractRegionFile> snapshot;
+         synchronized (this) {
++            snapshot = new java.util.ArrayList<>(this.regionCache.values());
++        }
++        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
++        for (final AbstractRegionFile regionFile : snapshot) {
+             try {
+-            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+-                try {
+-                    regionFile.close();
+-                } catch (final IOException ex) {
+-                    exceptionCollector.add(ex);
+-                }
++                regionFile.close();
++            } catch (final IOException ex) {
++                exceptionCollector.add(ex);
+             }
++        }
++        try {
+             exceptionCollector.throwIfPresent();
+-            } finally {
+-                LinearFlushCoordinator.evict(this.folder); // Linear - L2-A4: per-world eviction (A2 rule); flushes stragglers then drops the registry entry
+-            }
++        } finally {
++            LinearFlushCoordinator.evict(this.folder); // Linear - L2-A4: per-world eviction (A2 rule); flushes stragglers then drops the registry entry
+         }
+         // Paper end - rewrite chunk system
+     }
+ 
+     public void flush() throws IOException {
+         // Paper start - rewrite chunk system
++        // Linear - L3-0013: flushDirty touches neither regionCache nor the
++        // negative cache (re-verified in applied tree: coordinator dirty set
++        // only), so run the batch outside the monitor. Snapshot keeps the
++        // regionCache iteration safe without blocking concurrent opens.
++        LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - L2-A4: persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
++        final java.util.List<AbstractRegionFile> snapshot;
+         synchronized (this) {
+-            LinearFlushCoordinator.forFolder(this.folder).flushDirty(); // Linear - L2-A4: persist deferred Linear writes first (driven by Moonrise save path, no extra threads)
+-            final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
+-            for (final AbstractRegionFile regionFile : this.regionCache.values()) {
+-                try {
+-                    regionFile.flush();
+-                } catch (final IOException ex) {
+-                    exceptionCollector.add(ex);
+-                }
++            snapshot = new java.util.ArrayList<>(this.regionCache.values());
++        }
++        final ExceptionCollector<IOException> exceptionCollector = new ExceptionCollector<>();
++        for (final AbstractRegionFile regionFile : snapshot) {
++            try {
++                regionFile.flush();
++            } catch (final IOException ex) {
++                exceptionCollector.add(ex);
+             }
+-
+-            exceptionCollector.throwIfPresent();
+         }
++
++        exceptionCollector.throwIfPresent();
+         // Paper end - rewrite chunk system
+     }
+ 

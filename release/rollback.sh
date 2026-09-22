@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# rollback.sh — Sexidium-Folia Linear rollforward/rollback.
+# rollback.sh — Folia Linear rollforward/rollback.
 #
-#   Rung A (fast, proven live): flag flip back to ANVIL on the Sexidium jar.
+#   Rung A (fast, proven live): flag flip back to ANVIL on the Linear jar.
 #            Dual-read keeps existing .linear files readable; new writes go to .mca.
 #   Rung B (full, 0-diffs proven): rung A + linear2mca convert-back + verify
 #            + swap to the stock jar.
@@ -17,10 +17,10 @@
 #
 set -euo pipefail
 
-JAR_DEFAULT="/tmp/sexidium-folia/folia/folia-server/build/libs/folia-paperclip-26.1.2.local-SNAPSHOT.jar"
+JAR_DEFAULT="/tmp/folia-linear/folia/folia-server/build/libs/folia-paperclip-26.1.2.local-SNAPSHOT.jar"
 SHA_DEFAULT="3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c"
 CONVERTER_DEFAULT="/tmp/fork-study-adapt/convert.py"
-STOCK_JAR_DEFAULT="/opt/sexidium/stock/folia-paperclip-stock-26.1.2.jar"  # PLACEHOLDER: operator fills in
+STOCK_JAR_DEFAULT="/opt/folia-linear/stock/folia-paperclip-stock-26.1.2.jar"  # PLACEHOLDER: operator fills in
 
 RUNG=""; WORLDS_DIR=""; BACKUP_DIR=""; JAR="$JAR_DEFAULT"; EXPECTED_SHA="$SHA_DEFAULT"
 CONVERTER="$CONVERTER_DEFAULT"; STOCK_JAR="$STOCK_JAR_DEFAULT"
@@ -33,7 +33,7 @@ usage: rollback.sh --rung A|B|FORWARD --worlds-dir DIR --backup-dir DIR [options
   --worlds-dir DIR     live server worlds root (contains <world>/paper-world.yml or <world>/region/)
   --backup-dir DIR     verified snapshot root (must contain BACKUP_VERIFIED + a region/ tree)
   --worlds CSV         restrict to comma-separated world names (default: all with paper-world.yml)
-  --jar PATH           Sexidium jar to verify (default: SHIP-CANDIDATE in place)
+  --jar PATH           Linear jar to verify (default: SHIP-CANDIDATE in place)
   --expected-sha HEX   (default: 3d4713a0...3cd618c)
   --converter PATH     L2-A8 convert.py (rung B only; default: /tmp/fork-study-adapt/convert.py)
   --stock-jar PATH     stock paperclip jar (rung B only; PLACEHOLDER default — set explicitly)
@@ -122,7 +122,7 @@ flip_format() {
 
 case "$RUNG" in
   A)
-    log "RUNG A: flag flip to ANVIL (Sexidium jar stays)."
+    log "RUNG A: flag flip to ANVIL (Linear jar stays)."
     for w in $(list_worlds); do
       yml="$WORLDS_DIR/$w/paper-world.yml"
       [ -f "$yml" ] || { log "SKIP $w: no paper-world.yml"; continue; }
@@ -154,7 +154,7 @@ case "$RUNG" in
     for w in $(list_worlds); do
       src="$WORLDS_DIR/$w"
       [ -d "$src/region" ] || { log "SKIP $w: no region/ tree"; continue; }
-      tmp="$(mktemp -d "${TMPDIR:-/tmp}/sexidium-rollback-${w}.XXXXXX")"
+      tmp="$(mktemp -d "${TMPDIR:-/tmp}/linear-rollback-${w}.XXXXXX")"
       log "CONVERT $w: linear2mca $src -> $tmp/mca"
       if [ "$DRY_RUN" = "1" ]; then
         log "DRY-RUN: would run: python3 $CONVERTER linear2mca $src $tmp/mca"

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: SUM <sum@sexidium.local>
-Date: Sat, 20 Sep 2026 00:00:00 +0000
-Subject: [PATCH] Sexidium Linear region timing instrumentation (L1-TIMING)
+From: folia-linear <folia-linear@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear region timing instrumentation (L1-TIMING)
 
 Loop-1 Stage 2 (SUM): lock-free timing instrumentation for the Linear
 read/write/flush paths. No behaviour change on the ANVIL path
@@ -20,11 +20,11 @@ reportRead/Write/Flush/Load/Failure bridges deleted (file-level record*
 already forwards; storage stays zero-field). P3: close() needs no special
 case (didIo guard covers it). P5: fixed "ternary" comment (no ternary at
 the hit site). NMS hooks: LinearRegionStats (per-file view), snapshots()
-map on coordinator, sexidium$stats() on LinearRegionFile + RegionFileStorage
-(zero new storage fields, sexidium$ prefix, no signature changes, no Bukkit
+map on coordinator, linear$stats() on LinearRegionFile + RegionFileStorage
+(zero new storage fields, linear$ prefix, no signature changes, no Bukkit
 imports, no new threads/synchronized on hot paths).
 
-New file net/sexidium/LinearRegionTimings.java carries the public records
+New file net/linear/LinearRegionTimings.java carries the public records
 (LinearTimings(count,totalMicros,maxMicros,avgMicros) with
 of(LongAdder,LongAdder,LongAccumulator) + EMPTY, LinearRegionStats per-file
 view, and LinearFolderSnapshot with read/write/flush/load groups +
@@ -33,103 +33,11 @@ markDirty/filesFlushed/failures/oversizeRejects/evicts/cacheHits/cacheMisses
 fields/methods and finally-recording; the storage hunks only delegate to
 the coordinator (zero new storage fields).
 
-diff --git a/net/sexidium/LinearRegionTimings.java b/net/sexidium/LinearRegionTimings.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..7a1b2c3d4e5f60718293a4b5c6d7e8f901234567 100644
---- /dev/null
-+++ b/net/sexidium/LinearRegionTimings.java
-@@ -0,0 +1,81 @@
-+package net.sexidium;
-+
-+import java.util.concurrent.atomic.LongAccumulator;
-+import java.util.concurrent.atomic.LongAdder;
-+
-+/**
-+ * L1-TIMING (Loop 1, Stage 2): lock-free timing instrumentation for the Linear
-+ * read/write/flush paths.
-+ *
-+ * <p>Lock-free: all hot updates use {@link LongAdder}/{@link LongAccumulator}
-+ * (no {@code synchronized}, no locks, no threads). Elapsed times are
-+ * {@code System.nanoTime() / 1000} micros recorded in {@code finally} blocks
-+ * AFTER lock exit, so ANVIL behaviour is byte-identical and no hot-interface
-+ * signature changes.</p>
-+ */
-+public final class LinearRegionTimings {
-+
-+    private LinearRegionTimings() {
-+    }
-+
-+    /**
-+     * One timing group: count + total/max/avg micros.
-+     */
-+    public record LinearTimings(long count, long totalMicros, long maxMicros, long avgMicros) {
-+
-+        public static final LinearTimings EMPTY = new LinearTimings(0L, 0L, 0L, 0L);
-+
-+        public static LinearTimings of(LongAdder count, LongAdder totalMicros, LongAccumulator maxMicros) {
-+            long c = count.sum();
-+            long t = totalMicros.sum();
-+            long m = c == 0L ? 0L : maxMicros.get();
-+            if (m < 0L) {
-+                m = 0L;
-+            }
-+            if (t < 0L) {
-+                t = 0L;
-+            }
-+            long avg = c == 0L ? 0L : t / c;
-+            return new LinearTimings(c, t, m, avg);
-+        }
-+    }
-+
-+    /**
-+     * Per-file view for a single LinearRegionFile, returned by
-+     * {@code LinearRegionFile#sexidium$stats()}. Folder-wide aggregation lives
-+     * in {@link LinearFolderSnapshot} via the per-folder coordinator.
-+     */
-+    public record LinearRegionStats(
-+        LinearTimings read,
-+        LinearTimings write,
-+        LinearTimings flush,
-+        LinearTimings load
-+    ) {
-+
-+        public static final LinearRegionStats EMPTY = new LinearRegionStats(
-+            LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY);
-+    }
-+
-+    /**
-+     * Folder-wide snapshot: four timing groups plus lifecycle counts plus dirty depth.
-+     */
-+    public record LinearFolderSnapshot(
-+        LinearTimings read,
-+        LinearTimings write,
-+        LinearTimings flush,
-+        LinearTimings load,
-+        long markDirty,
-+        long filesFlushed,
-+        long failures,
-+        long oversizeRejects,
-+        long evicts,
-+        long cacheHits,
-+        long cacheMisses,
-+        int dirtyDepth
-+    ) {
-+
-+        public static final LinearFolderSnapshot EMPTY = new LinearFolderSnapshot(
-+            LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY,
-+            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0);
-+    }
-+}
-diff --git a/net/sexidium/LinearFlushCoordinator.java b/net/sexidium/LinearFlushCoordinator.java
-index 58d427b..a1b2c3d4e 100644
---- a/net/sexidium/LinearFlushCoordinator.java
-+++ b/net/sexidium/LinearFlushCoordinator.java
-@@ -1,11 +1,13 @@
- package net.sexidium;
- 
- import java.nio.file.Path;
- import java.util.ArrayList;
- import java.util.Iterator;
+diff --git a/net/linear/LinearFlushCoordinator.java b/net/linear/LinearFlushCoordinator.java
+index 1f8e3cc4e6e3c539c1f376067e900b0c73451ab5..925e570211aed38c1c3bfd6ea19e9f6944216e68 100644
+--- a/net/linear/LinearFlushCoordinator.java
++++ b/net/linear/LinearFlushCoordinator.java
+@@ -6,6 +6,8 @@ import java.util.Iterator;
  import java.util.LinkedHashSet;
  import java.util.List;
  import java.util.concurrent.ConcurrentHashMap;
@@ -138,11 +46,19 @@ index 58d427b..a1b2c3d4e 100644
  import org.slf4j.Logger;
  import org.slf4j.LoggerFactory;
  
-@@ -38,6 +40,28 @@ public final class LinearFlushCoordinator {
+@@ -66,6 +68,7 @@ public final class LinearFlushCoordinator {
+         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
+         if (coordinator != null) {
+             coordinator.flushDirty();
++            coordinator.recordEvict(); // Linear L1-TIMING: evict count (lock-free)
+         }
+     }
+ 
+@@ -76,6 +79,28 @@ public final class LinearFlushCoordinator {
      private final Path folder;
      /** Insertion-ordered identity set; guarded by {@code this}. */
      private final LinkedHashSet<AbstractRegionFile> dirty = new LinkedHashSet<>();
-+    // Sexidium L1-TIMING: lock-free folder-wide timing/counts. Hot updates use
++    // Linear L1-TIMING: lock-free folder-wide timing/counts. Hot updates use
 +    // LongAdder/LongAccumulator only (no synchronized, no locks); dirtyDepth is
 +    // the only value read under lock in snapshot().
 +    private final LongAdder readCount = new LongAdder();
@@ -167,54 +83,34 @@ index 58d427b..a1b2c3d4e 100644
  
      private LinearFlushCoordinator(Path folder) {
          this.folder = folder;
-@@ -55,7 +90,8 @@ public final class LinearFlushCoordinator {
-     public static void evict(Path folder) {
-         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
-         if (coordinator != null) {
-             coordinator.flushDirty();
-+            coordinator.recordEvict(); // Sexidium L1-TIMING: evict count (lock-free)
-         }
-     }
- 
-@@ -70,6 +106,8 @@ public final class LinearFlushCoordinator {
+@@ -97,6 +122,8 @@ public final class LinearFlushCoordinator {
                  it.remove();
              }
          }
-+        // Sexidium L1-TIMING: markDirty count outside sync (lock-free).
++        // Linear L1-TIMING: markDirty count outside sync (lock-free).
 +        this.markDirtyCount.increment();
          if (eldest != null) {
              this.flushOne(eldest);
          }
-@@ -132,17 +159,23 @@ public final class LinearFlushCoordinator {
-     private void flushOne(AbstractRegionFile file) {
-         boolean ok = false;
-         try {
-             if (file.isMarkedToSave()) {
-                 file.flush();
-             }
-             // Cleared only after a successful flush; a write racing between
-             // flush() and clear re-marks the file and is picked up next pass.
-             file.clearMarkedToSave();
+@@ -141,6 +168,12 @@ public final class LinearFlushCoordinator {
              ok = true;
          } catch (Exception ex) {
              LOGGER.warn("Failed to flush linear region file for folder {}, will retry on next save", this.folder, ex);
-+            this.recordFailure(); // Sexidium L1-TIMING: failure count (lock-free)
-         }
-+        // Sexidium L1-TIMING: filesFlushed only on success (P1: failures retry
++            this.recordFailure(); // Linear L1-TIMING: failure count (lock-free)
++        }
++        // Linear L1-TIMING: filesFlushed only on success (P1: failures retry
 +        // via the re-queue below, so they must not inflate filesFlushed).
 +        if (ok) {
 +            this.filesFlushedCount.increment();
-+        }
+         }
          if (!ok) {
              // Re-queue (bounded) so a transient failure is retried instead of
-             // silently dropping durability. The flag was NOT cleared above,
-             // so no data is lost even if the re-queue itself overflows.
-@@ -125,4 +176,132 @@ public final class LinearFlushCoordinator {
+@@ -153,4 +186,132 @@ public final class LinearFlushCoordinator {
              }
          }
      }
 +
-+    // Sexidium L1-TIMING: package-private hot record methods (same-package file
++    // Linear L1-TIMING: package-private hot record methods (same-package file
 +    // paths use these directly; RegionFileStorage uses the public report bridges
 +    // below because it lives in another package). Lock-free (LongAdder only).
 +    void recordRead(long micros) {
@@ -261,7 +157,7 @@ index 58d427b..a1b2c3d4e 100644
 +        this.cacheMissCount.increment();
 +    }
 +
-+    // Sexidium L1-TIMING: public cross-package bridges for RegionFileStorage
++    // Linear L1-TIMING: public cross-package bridges for RegionFileStorage
 +    // (different package; delegates reporting to this coordinator so storage
 +    // holds zero new fields). P2: only the wired bridges are kept; dead
 +    // reportRead/Write/Flush/Load/Failure bridges are deleted (file-level
@@ -279,7 +175,7 @@ index 58d427b..a1b2c3d4e 100644
 +    }
 +
 +    /**
-+     * Sexidium L1-TIMING: folder snapshot. dirtyDepth is read under lock;
++     * Linear L1-TIMING: folder snapshot. dirtyDepth is read under lock;
 +     * all counters are read outside the lock (lock-free LongAdder sums).
 +     */
 +    public LinearRegionTimings.LinearFolderSnapshot snapshot() {
@@ -303,7 +199,7 @@ index 58d427b..a1b2c3d4e 100644
 +    }
 +
 +    /**
-+     * Sexidium linearstats: per-folder snapshots keyed by absolute folder-path
++     * Linear linearstats: per-folder snapshots keyed by absolute folder-path
 +     * string (same key as BY_FOLDER). Pull-only view for the linearstats
 +     * command; no new threads, no extra locking beyond snapshot()'s
 +     * dirty-depth read.
@@ -317,7 +213,7 @@ index 58d427b..a1b2c3d4e 100644
 +    }
 +
 +    /**
-+     * Sexidium L1-TIMING: explicit test-only reset. The ONLY mutator that
++     * Linear L1-TIMING: explicit test-only reset. The ONLY mutator that
 +     * clears counters (lifecycle/dirty set untouched).
 +     */
 +    public void resetForTests() {
@@ -342,11 +238,11 @@ index 58d427b..a1b2c3d4e 100644
 +        this.cacheMissCount.reset();
 +    }
  }
-diff --git a/net/sexidium/LinearRegionFile.java b/net/sexidium/LinearRegionFile.java
-index c58562e..d4e5f6a7b 100644
---- a/net/sexidium/LinearRegionFile.java
-+++ b/net/sexidium/LinearRegionFile.java
-@@ -12,6 +12,8 @@ import java.nio.file.Path;
+diff --git a/net/linear/LinearRegionFile.java b/net/linear/LinearRegionFile.java
+index bbb3894a10c38bce9d80679ad077ad68ba7ce2b5..098d131d5bfd0448da497fb2d7b130f9b943f7ac 100644
+--- a/net/linear/LinearRegionFile.java
++++ b/net/linear/LinearRegionFile.java
+@@ -15,6 +15,8 @@ import java.nio.file.Path;
  import java.nio.file.StandardCopyOption;
  import java.nio.file.StandardOpenOption;
  import java.util.Objects;
@@ -355,11 +251,11 @@ index c58562e..d4e5f6a7b 100644
  import java.util.concurrent.locks.ReentrantLock;
  import net.jpountz.lz4.LZ4Factory;
  import net.minecraft.world.level.ChunkPos;
-@@ -28,6 +30,22 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -99,6 +101,22 @@ public final class LinearRegionFile implements AbstractRegionFile {
      private final Path file;
      private final int compressionLevel;
  
-+    // Sexidium L1-TIMING: lock-free per-file timing groups. Hot updates use
++    // Linear L1-TIMING: lock-free per-file timing groups. Hot updates use
 +    // LongAdder/LongAccumulator only (no synchronized); add() calls run AFTER
 +    // unlock/exit in finally blocks and forward to forFolder(parent).
 +    private final LongAdder readCount = new LongAdder();
@@ -378,17 +274,17 @@ index c58562e..d4e5f6a7b 100644
      private final ReentrantLock slotLock = new ReentrantLock();
      private final ReentrantLock flushGuard = new ReentrantLock();
  
-@@ -62,5 +81,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -134,6 +152,9 @@ public final class LinearRegionFile implements AbstractRegionFile {
+      */
      @Override
      public DataInputStream getChunkDataInputStream(final ChunkPos pos) throws IOException {
-+        // Sexidium L1-TIMING: read timing, recorded AFTER unlock/exit.
++        // Linear L1-TIMING: read timing, recorded AFTER unlock/exit.
 +        final long startNanos = System.nanoTime();
 +        try {
          ensureOpen();
          Objects.requireNonNull(pos, "pos");
          final int index = slotIndex(pos);
-@@ -89,7 +113,23 @@ public final class LinearRegionFile implements AbstractRegionFile {
-         // Absolute-offset LZ4 calls leave positions untouched, so expose
+@@ -164,7 +185,23 @@ public final class LinearRegionFile implements AbstractRegionFile {
          // exactly the decompressed range instead of flip()ing (which would empty it).
          out.position(size);
          out.flip();
@@ -412,20 +308,22 @@ index c58562e..d4e5f6a7b 100644
 +        }
      }
  
-@@ -104,5 +141,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
+     /**
+@@ -177,6 +214,9 @@ public final class LinearRegionFile implements AbstractRegionFile {
+      */
      @Override
      public void write(final ChunkPos pos, final ByteBuffer buf) throws IOException {
-+        // Sexidium L1-TIMING: write timing, recorded AFTER unlock/exit.
++        // Linear L1-TIMING: write timing, recorded AFTER unlock/exit.
 +        final long startNanos = System.nanoTime();
 +        try {
          ensureOpen();
          Objects.requireNonNull(pos, "pos");
          Objects.requireNonNull(buf, "buf");
-@@ -124,6 +164,17 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -196,6 +236,17 @@ public final class LinearRegionFile implements AbstractRegionFile {
              return;
          }
          if (size > MAX_CHUNK_SIZE) {
-+            // Sexidium L1-TIMING: oversize-throw records then rethrows unchanged.
++            // Linear L1-TIMING: oversize-throw records then rethrows unchanged.
 +            try {
 +                Path parent = this.file.getParent();
 +                if (parent == null) {
@@ -439,7 +337,7 @@ index c58562e..d4e5f6a7b 100644
              throw new IOException("Chunk " + pos + " is " + size + " bytes, exceeds " + MAX_CHUNK_SIZE
                  + "; oversized .mcc external files are unsupported");
          }
-@@ -143,5 +191,21 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -220,6 +271,22 @@ public final class LinearRegionFile implements AbstractRegionFile {
          } finally {
              this.slotLock.unlock();
          }
@@ -461,40 +359,33 @@ index c58562e..d4e5f6a7b 100644
 +        }
      }
  
-@@ -170,14 +218,28 @@ public final class LinearRegionFile implements AbstractRegionFile {
-     /** Owner-driven reset of the dirty flag; does not touch slot data. */
-     @Override
-     public void clearMarkedToSave() {
-         this.slotLock.lock();
-         try {
-             this.dirty = false;
-         } finally {
-             this.slotLock.unlock();
+     /** Returns true if the chunk slot holds a payload. Fail-fast when closed. */
+@@ -276,6 +343,20 @@ public final class LinearRegionFile implements AbstractRegionFile {
          }
      }
-+
+ 
 +    /**
-+     * Sexidium linearstats: per-file timing view (pull-only, lock-free sums).
++     * Linear linearstats: per-file timing view (pull-only, lock-free sums).
 +     * Zero new storage fields on the storage side; the command aggregates
 +     * these via the coordinator snapshots(). No Bukkit imports, no threads,
 +     * no synchronized on the hot path.
 +     */
-+    public LinearRegionTimings.LinearRegionStats sexidium$stats() {
++    public LinearRegionTimings.LinearRegionStats linear$stats() {
 +        return new LinearRegionTimings.LinearRegionStats(
 +            LinearRegionTimings.LinearTimings.of(this.readCount, this.readTotalMicros, this.readMaxMicros),
 +            LinearRegionTimings.LinearTimings.of(this.writeCount, this.writeTotalMicros, this.writeMaxMicros),
 +            LinearRegionTimings.LinearTimings.of(this.flushCount, this.flushTotalMicros, this.flushMaxMicros),
 +            LinearRegionTimings.LinearTimings.of(this.loadCount, this.loadTotalMicros, this.loadMaxMicros));
 +    }
- 
++
      /**
       * Flushes dirty state (if any) and closes. No threads are involved, so
       * close only does file IO when there is unsaved work.
-@@ -205,6 +268,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -297,6 +378,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
      // internal
  
      private void doFlush() throws IOException {
-+        // Sexidium L1-TIMING: flush timing, recorded AFTER guard unlock/exit.
++        // Linear L1-TIMING: flush timing, recorded AFTER guard unlock/exit.
 +        // Clean-no-op records nothing via didIo (P1/P3: close() needs no
 +        // special case; the guard covers it).
 +        final long startNanos = System.nanoTime();
@@ -503,25 +394,20 @@ index c58562e..d4e5f6a7b 100644
          this.flushGuard.lock();
          try {
              final ByteBuffer[] snapPacked = new ByteBuffer[SLOTS];
-@@ -230,11 +300,12 @@ public final class LinearRegionFile implements AbstractRegionFile {
-                 this.dirty = false;
-             } finally {
-                 this.slotLock.unlock();
-             }
- 
+@@ -329,6 +416,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
              if (chunkCount == 0 && !Files.isRegularFile(this.file)) {
                  return; // never persisted and still empty: leave no file behind
              }
-+            didIo = true; // Sexidium L1-TIMING: past both clean-no-op exits, IO follows.
++            didIo = true; // Linear L1-TIMING: past both clean-no-op exits, IO follows.
  
              // LZ4 -> raw (unlocked, CPU only).
              final ByteBuffer[] plain = new ByteBuffer[SLOTS];
-@@ -345,9 +411,30 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -423,9 +511,30 @@ public final class LinearRegionFile implements AbstractRegionFile {
          } finally {
              this.flushGuard.unlock();
          }
 +        } finally {
-+            if (didIo) { // Sexidium L1-TIMING: P1 clean-no-op records nothing.
++            if (didIo) { // Linear L1-TIMING: P1 clean-no-op records nothing.
 +                final long micros = (System.nanoTime() - startNanos) / 1000L;
 +                this.flushCount.increment();
 +                this.flushTotalMicros.add(micros);
@@ -541,13 +427,13 @@ index c58562e..d4e5f6a7b 100644
      }
  
      private void load() throws IOException {
-+        // Sexidium L1-TIMING: load timing, recorded AFTER publish unlock/exit.
++        // Linear L1-TIMING: load timing, recorded AFTER publish unlock/exit.
 +        final long startNanos = System.nanoTime();
 +        try {
          final ByteBuffer[] staged = new ByteBuffer[SLOTS];
          final int[] stagedSize = new int[SLOTS];
          final int[] stagedTime = new int[SLOTS];
-@@ -430,6 +511,22 @@ public final class LinearRegionFile implements AbstractRegionFile {
+@@ -515,6 +624,22 @@ public final class LinearRegionFile implements AbstractRegionFile {
          } finally {
              this.slotLock.unlock();
          }
@@ -570,26 +456,112 @@ index c58562e..d4e5f6a7b 100644
      }
  
      private static ByteBuffer lz4Pack(final ByteBuffer plain) {
+diff --git a/net/linear/LinearRegionTimings.java b/net/linear/LinearRegionTimings.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..02ed5d3c0269f910c4ff6048503999b9668f9348
+--- /dev/null
++++ b/net/linear/LinearRegionTimings.java
+@@ -0,0 +1,81 @@
++package net.linear;
++
++import java.util.concurrent.atomic.LongAccumulator;
++import java.util.concurrent.atomic.LongAdder;
++
++/**
++ * L1-TIMING (Loop 1, Stage 2): lock-free timing instrumentation for the Linear
++ * read/write/flush paths.
++ *
++ * <p>Lock-free: all hot updates use {@link LongAdder}/{@link LongAccumulator}
++ * (no {@code synchronized}, no locks, no threads). Elapsed times are
++ * {@code System.nanoTime() / 1000} micros recorded in {@code finally} blocks
++ * AFTER lock exit, so ANVIL behaviour is byte-identical and no hot-interface
++ * signature changes.</p>
++ */
++public final class LinearRegionTimings {
++
++    private LinearRegionTimings() {
++    }
++
++    /**
++     * One timing group: count + total/max/avg micros.
++     */
++    public record LinearTimings(long count, long totalMicros, long maxMicros, long avgMicros) {
++
++        public static final LinearTimings EMPTY = new LinearTimings(0L, 0L, 0L, 0L);
++
++        public static LinearTimings of(LongAdder count, LongAdder totalMicros, LongAccumulator maxMicros) {
++            long c = count.sum();
++            long t = totalMicros.sum();
++            long m = c == 0L ? 0L : maxMicros.get();
++            if (m < 0L) {
++                m = 0L;
++            }
++            if (t < 0L) {
++                t = 0L;
++            }
++            long avg = c == 0L ? 0L : t / c;
++            return new LinearTimings(c, t, m, avg);
++        }
++    }
++
++    /**
++     * Per-file view for a single LinearRegionFile, returned by
++     * {@code LinearRegionFile#linear$stats()}. Folder-wide aggregation lives
++     * in {@link LinearFolderSnapshot} via the per-folder coordinator.
++     */
++    public record LinearRegionStats(
++        LinearTimings read,
++        LinearTimings write,
++        LinearTimings flush,
++        LinearTimings load
++    ) {
++
++        public static final LinearRegionStats EMPTY = new LinearRegionStats(
++            LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY);
++    }
++
++    /**
++     * Folder-wide snapshot: four timing groups plus lifecycle counts plus dirty depth.
++     */
++    public record LinearFolderSnapshot(
++        LinearTimings read,
++        LinearTimings write,
++        LinearTimings flush,
++        LinearTimings load,
++        long markDirty,
++        long filesFlushed,
++        long failures,
++        long oversizeRejects,
++        long evicts,
++        long cacheHits,
++        long cacheMisses,
++        int dirtyDepth
++    ) {
++
++        public static final LinearFolderSnapshot EMPTY = new LinearFolderSnapshot(
++            LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY,
++            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0);
++    }
++}
 diff --git a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-index af2fdcf..b2c3d4e5f 100644
+index 63abf1eadd70a7db3a9c4508218059496e2d4fbf..869c6c86fd9bed6c4403bb76e105f43c24f0bf62 100644
 --- a/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/RegionFileStorage.java
-@@ -131,12 +131,22 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
-     @Override
-     public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Sexidium - widened + dual-read probe
+@@ -139,10 +139,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
+     public synchronized final AbstractRegionFile moonrise$getRegionFileIfExists(final int chunkX, final int chunkZ) throws IOException { // Linear - widened + dual-read probe
          final long key = ChunkPos.pack(chunkX >> REGION_SHIFT, chunkZ >> REGION_SHIFT);
  
 -        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
-+        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key); // Sexidium L1-TIMING: cache-hit accounting below (no recalc-counter touch)
++        AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key); // Linear L1-TIMING: cache-hit accounting below (no recalc-counter touch)
          if (ret != null) {
-+            // Sexidium L1-TIMING: cache hit (lock-free delegate, zero new fields).
++            // Linear L1-TIMING: cache hit (lock-free delegate, zero new fields).
 +            try {
 +                LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
 +            } catch (RuntimeException ignored) {
 +            }
              return ret;
          }
-+        // Sexidium L1-TIMING: cache miss (lock-free delegate, zero new fields).
++        // Linear L1-TIMING: cache miss (lock-free delegate, zero new fields).
 +        try {
 +            LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
 +        } catch (RuntimeException ignored) {
@@ -597,35 +569,33 @@ index af2fdcf..b2c3d4e5f 100644
  
          if (!this.doesRegionFilePossiblyExist(key)) {
              return null;
-         }
 @@ -205,6 +215,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
              NbtIo.write(compound, linearOut);
              linearOut.close();
              final byte[] linearBytes = linearBuffer.toByteArray();
-+            // Sexidium L1-TIMING: oversize-reject count (lock-free); behaviour
++            // Linear L1-TIMING: oversize-reject count (lock-free); behaviour
 +            // unchanged (DELETE + log, anvil parity).
-+            if (linearBytes.length > net.sexidium.LinearRegionFile.MAX_CHUNK_SIZE) {
++            if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
 +                try {
 +                    LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
 +                } catch (RuntimeException ignored) {
 +                }
 +            }
-             // Sexidium L3-B4 (Q4): linear oversize pre-check. Ownership split:
+             // Linear L3-B4 (Q4): linear oversize pre-check. Ownership split:
              // LinearRegionFile.write() enforces the cap invariant (throws); this
              // site decides behavior (DELETE + log, anvil parity). Early return
-@@ -341,10 +359,20 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
-             final long key = ChunkPos.pack(pos.x() >> REGION_SHIFT, pos.z() >> REGION_SHIFT);
+@@ -389,8 +407,18 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
  
              AbstractRegionFile ret = this.regionCache.getAndMoveToFirst(key);
              if (ret != null) {
-+                // Sexidium L1-TIMING: cache hit (lock-free delegate, zero new fields).
++                // Linear L1-TIMING: cache hit (lock-free delegate, zero new fields).
 +                try {
 +                    LinearFlushCoordinator.forFolder(this.folder).reportCacheHit();
 +                } catch (RuntimeException ignored) {
 +                }
                  return ret;
              }
-+            // Sexidium L1-TIMING: cache miss (lock-free delegate, zero new fields).
++            // Linear L1-TIMING: cache miss (lock-free delegate, zero new fields).
 +            try {
 +                LinearFlushCoordinator.forFolder(this.folder).reportCacheMiss();
 +            } catch (RuntimeException ignored) {
@@ -633,20 +603,19 @@ index af2fdcf..b2c3d4e5f 100644
  
              final int cacheSize = io.papermc.paper.configuration.GlobalConfiguration.get() == null ? 256 : io.papermc.paper.configuration.GlobalConfiguration.get().misc.regionFileCacheSize; // Paper - Sanitise RegionFileCache and make configurable - Config not available during initial FileFixerUpper run
  
-             if (this.regionCache.size() >= cacheSize) {
 @@ -558,6 +586,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
                      NbtIo.write(value, output);
                  }
                  byte[] linearBytes = linearBuffer.toByteArray();
-+                // Sexidium L1-TIMING: oversize-reject count (lock-free); delete+log
++                // Linear L1-TIMING: oversize-reject count (lock-free); delete+log
 +                // parity unchanged.
-+                if (linearBytes.length > net.sexidium.LinearRegionFile.MAX_CHUNK_SIZE) {
++                if (linearBytes.length > net.linear.LinearRegionFile.MAX_CHUNK_SIZE) {
 +                    try {
 +                        LinearFlushCoordinator.forFolder(this.folder).reportOversizeReject();
 +                    } catch (RuntimeException ignored) {
 +                    }
 +                }
-                 // Sexidium L3-B4 (Q4): same pre-check as the Moonrise path above;
+                 // Linear L3-B4 (Q4): same pre-check as the Moonrise path above;
                  // vanilla parity is delete + log (cf. the anvil
                  // catch(RegionFileSizeException) arm). The slot clear persists on
 @@ -576,6 +612,14 @@ public class RegionFileStorage implements AutoCloseable, ca.spottedleaf.moonrise
@@ -654,11 +623,11 @@ index af2fdcf..b2c3d4e5f 100644
      }
  
 +    /**
-+     * Sexidium linearstats: folder snapshot pull-through (zero new fields;
++     * Linear linearstats: folder snapshot pull-through (zero new fields;
 +     * delegates to the per-folder coordinator). NMS stays Bukkit-free.
 +     */
-+    public net.sexidium.LinearRegionTimings.LinearFolderSnapshot sexidium$stats() {
-+        return net.sexidium.LinearFlushCoordinator.forFolder(this.folder).snapshot();
++    public net.linear.LinearRegionTimings.LinearFolderSnapshot linear$stats() {
++        return net.linear.LinearFlushCoordinator.forFolder(this.folder).snapshot();
 +    }
 +
      @Override

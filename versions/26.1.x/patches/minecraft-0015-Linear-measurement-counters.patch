@@ -1,0 +1,235 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear <folia-linear@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear measurement counters (minecraft-0015)
+
+Loop-3 (agent 23): measurement counters Loop-4 needs, plus S8 blind-spot
+fix. Folder-level: compressed vs raw bytes, bucketed flush p50/p99,
+millis-since-last-successful-flush; markDirty + cache hits/misses exposed
+(already in snapshot, now pinned by test so /linearstats can separate
+"never invoked" from "empty set"). LongAdder/LongAccumulator only, no
+synchronized on hot paths, no pool re-cut of recordFlush (same signature,
+same threading). No threads -- "No threads" stays true.
+
+diff --git a/net/linear/LinearRegionTimings.java b/net/linear/LinearRegionTimings.java
+index 02ed5d3..50c4580 100644
+--- a/net/linear/LinearRegionTimings.java
++++ b/net/linear/LinearRegionTimings.java
+@@ -57,7 +57,18 @@ public final class LinearRegionTimings {
+     }
+ 
+     /**
+-     * Folder-wide snapshot: four timing groups plus lifecycle counts plus dirty depth.
++     * Folder-wide snapshot: four timing groups plus lifecycle counts plus dirty depth
++     * plus Loop-4 measurement fields (minecraft-0015, lock-free).
++     *
++     * <p>New fields: {@code rawBytes}/{@code compressedBytes} are summed flush
++     * image bytes (uncompressed vs zstd); {@code flushP50Micros}/
++     * {@code flushP99Micros} are bucketed latency estimates from actual I/O
++     * flushes only (clean-no-ops excluded, same as {@code flush.count});
++     * {@code millisSinceLastFlush} is wall time since the last successful
++     * folder flush ({@code -1} when never flushed). {@code markDirty},
++     * {@code cacheHits}/{@code cacheMisses} are exposed so operators can
++     * separate "never invoked" (all zero, no snapshot entry) from "empty set"
++     * (entry present but counts zero) -- Loop-1 S8 blind-spot fix.
+      */
+     public record LinearFolderSnapshot(
+         LinearTimings read,
+@@ -71,11 +82,17 @@ public final class LinearRegionTimings {
+         long evicts,
+         long cacheHits,
+         long cacheMisses,
+-        int dirtyDepth
++        int dirtyDepth,
++        long rawBytes,
++        long compressedBytes,
++        long flushP50Micros,
++        long flushP99Micros,
++        long millisSinceLastFlush
+     ) {
+ 
+         public static final LinearFolderSnapshot EMPTY = new LinearFolderSnapshot(
+             LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY, LinearTimings.EMPTY,
+-            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0);
++            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0,
++            0L, 0L, 0L, 0L, -1L);
+     }
+ }
+diff --git a/net/linear/LinearFlushCoordinator.java b/net/linear/LinearFlushCoordinator.java
+index 925e570..d1137ad 100644
+--- a/net/linear/LinearFlushCoordinator.java
++++ b/net/linear/LinearFlushCoordinator.java
+@@ -101,6 +101,21 @@ public final class LinearFlushCoordinator {
+     private final LongAdder evictCount = new LongAdder();
+     private final LongAdder cacheHitCount = new LongAdder();
+     private final LongAdder cacheMissCount = new LongAdder();
++    // Linear - minecraft-0015 (Loop-4 measurements, lock-free only, no
++    // synchronized on hot paths, no pool re-cut of recordFlush): summed flush
++    // image bytes, bucketed flush latency for p50/p99, last-success timestamp.
++    private final LongAdder rawBytesTotal = new LongAdder();
++    private final LongAdder compressedBytesTotal = new LongAdder();
++    private final LongAccumulator lastFlushSuccessNanos = new LongAccumulator(Long::max, 0L);
++    // Linear - minecraft-0015: flush latency buckets (micros, upper bounds).
++    // 10 buckets cover 1ms..1s+; recordFlush increments exactly one bucket
++    // (LongAdder only). Snapshot walks buckets for p50/p99 estimates.
++    private static final long[] FLUSH_BUCKET_UPPER = new long[]{
++        1_000L, 5_000L, 10_000L, 25_000L, 50_000L,
++        100_000L, 250_000L, 500_000L, 1_000_000L, Long.MAX_VALUE};
++    private final LongAdder[] flushBuckets = new LongAdder[]{
++        new LongAdder(), new LongAdder(), new LongAdder(), new LongAdder(), new LongAdder(),
++        new LongAdder(), new LongAdder(), new LongAdder(), new LongAdder(), new LongAdder()};
+ 
+     private LinearFlushCoordinator(Path folder) {
+         this.folder = folder;
+@@ -174,6 +189,8 @@ public final class LinearFlushCoordinator {
+         // via the re-queue below, so they must not inflate filesFlushed).
+         if (ok) {
+             this.filesFlushedCount.increment();
++            // Linear - minecraft-0015: last-success timestamp (lock-free max).
++            this.lastFlushSuccessNanos.accumulate(System.nanoTime());
+         }
+         if (!ok) {
+             // Re-queue (bounded) so a transient failure is retried instead of
+@@ -206,6 +223,24 @@ public final class LinearFlushCoordinator {
+         this.flushCount.increment();
+         this.flushTotalMicros.add(micros);
+         this.flushMaxMicros.accumulate(micros);
++        // Linear - minecraft-0015: bucketed latency (lock-free, one bucket).
++        // No pool re-cut: same signature, same threading, just one more adder.
++        for (int i = 0; i < FLUSH_BUCKET_UPPER.length; i++) {
++            if (micros <= FLUSH_BUCKET_UPPER[i]) {
++                this.flushBuckets[i].increment();
++                break;
++            }
++        }
++    }
++
++    void recordFlushBytes(long rawBytes, long compressedBytes) {
++        // Linear - minecraft-0015: summed image bytes (lock-free).
++        if (rawBytes > 0L) {
++            this.rawBytesTotal.add(rawBytes);
++        }
++        if (compressedBytes > 0L) {
++            this.compressedBytesTotal.add(compressedBytes);
++        }
+     }
+ 
+     void recordLoad(long micros) {
+@@ -254,12 +289,28 @@ public final class LinearFlushCoordinator {
+     /**
+      * Linear L1-TIMING: folder snapshot. dirtyDepth is read under lock;
+      * all counters are read outside the lock (lock-free LongAdder sums).
++     * Minecraft-0015 adds bytes, p50/p99 and millis-since-flush (same pattern).
+      */
+     public LinearRegionTimings.LinearFolderSnapshot snapshot() {
+         final int depth;
+         synchronized (this) {
+             depth = this.dirty.size();
+         }
++        long[] buckets = new long[FLUSH_BUCKET_UPPER.length];
++        for (int i = 0; i < buckets.length; i++) {
++            buckets[i] = this.flushBuckets[i].sum();
++        }
++        long totalFlush = 0L;
++        for (long b : buckets) {
++            totalFlush += b;
++        }
++        long p50 = bucketQuantile(buckets, totalFlush, 0.50);
++        long p99 = bucketQuantile(buckets, totalFlush, 0.99);
++        long lastNanos = this.lastFlushSuccessNanos.get();
++        long millisSince = lastNanos <= 0L ? -1L : (System.nanoTime() - lastNanos) / 1_000_000L;
++        if (millisSince < -1L) {
++            millisSince = -1L;
++        }
+         return new LinearRegionTimings.LinearFolderSnapshot(
+             LinearRegionTimings.LinearTimings.of(this.readCount, this.readTotalMicros, this.readMaxMicros),
+             LinearRegionTimings.LinearTimings.of(this.writeCount, this.writeTotalMicros, this.writeMaxMicros),
+@@ -272,7 +323,33 @@ public final class LinearFlushCoordinator {
+             this.evictCount.sum(),
+             this.cacheHitCount.sum(),
+             this.cacheMissCount.sum(),
+-            depth);
++            depth,
++            this.rawBytesTotal.sum(),
++            this.compressedBytesTotal.sum(),
++            p50,
++            p99,
++            millisSince);
++    }
++
++    // Linear - minecraft-0015: bucket upper-bound as pXX estimate (lock-free
++    // read; 0 when no flushes yet). Conservative (upper bound) by design.
++    private static long bucketQuantile(long[] buckets, long total, double q) {
++        if (total <= 0L) {
++            return 0L;
++        }
++        long need = (long) Math.ceil(total * q);
++        if (need < 1L) {
++            need = 1L;
++        }
++        long acc = 0L;
++        for (int i = 0; i < buckets.length; i++) {
++            acc += buckets[i];
++            if (acc >= need) {
++                long upper = FLUSH_BUCKET_UPPER[i];
++                return upper == Long.MAX_VALUE ? 1_000_001L : upper;
++            }
++        }
++        return 0L;
+     }
+ 
+     /**
+@@ -313,5 +390,11 @@ public final class LinearFlushCoordinator {
+         this.evictCount.reset();
+         this.cacheHitCount.reset();
+         this.cacheMissCount.reset();
++        this.rawBytesTotal.reset();
++        this.compressedBytesTotal.reset();
++        for (LongAdder b : this.flushBuckets) {
++            b.reset();
++        }
++        this.lastFlushSuccessNanos.reset();
+     }
+ }
+diff --git a/net/linear/LinearRegionFile.java b/net/linear/LinearRegionFile.java
+index 098d131..5859ceb 100644
+--- a/net/linear/LinearRegionFile.java
++++ b/net/linear/LinearRegionFile.java
+@@ -457,6 +457,8 @@ public final class LinearRegionFile implements AbstractRegionFile {
+             // needs to be buffered in memory first.
+             final Path tmp = this.file.resolveSibling(this.file.getFileName() + ".tmp");
+             createParentDirs(tmp);
++            // Linear - minecraft-0015: hoisted for byte counters below (lock-free).
++            long packedForMetrics = 0L;
+             try (FileChannel channel = FileChannel.open(tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                 StandardOpenOption.TRUNCATE_EXISTING)) {
+                 final ByteBuffer header = ByteBuffer.allocateDirect(HEADER_SIZE);
+@@ -490,6 +492,7 @@ public final class LinearRegionFile implements AbstractRegionFile {
+                 if (packedLength < 0L || packedLength > Integer.MAX_VALUE) {
+                     throw new IOException("Invalid zstd frame length " + packedLength + " for " + this.file);
+                 }
++                packedForMetrics = packedLength;
+                 final ByteBuffer patch = ByteBuffer.allocateDirect(4);
+                 patch.putInt((int) packedLength);
+                 patch.flip();
+@@ -502,6 +505,20 @@ public final class LinearRegionFile implements AbstractRegionFile {
+             } catch (final AtomicMoveNotSupportedException fallback) {
+                 Files.move(tmp, this.file, StandardCopyOption.REPLACE_EXISTING);
+             }
++            // Linear - minecraft-0015: byte counters (lock-free, no pool re-cut).
++            // totalRaw is the uncompressed image (TABLE_SIZE + payloads);
++            // packedForMetrics is the zstd frame. Recorded only on success
++            // (after move); failures re-mark dirty and record nothing here.
++            try {
++                Path parent = this.file.getParent();
++                if (parent == null) {
++                    parent = this.file.toAbsolutePath().getParent();
++                }
++                if (parent != null) {
++                    LinearFlushCoordinator.forFolder(parent).recordFlushBytes(totalRaw, packedForMetrics);
++                }
++            } catch (RuntimeException ignored) {
++            }
+         } catch (final IOException e) {
+             this.markDirty();
+             throw e;

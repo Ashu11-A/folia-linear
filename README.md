@@ -20,12 +20,12 @@ real world data is roughly half the disk.
 
 ## Measured results
 
-- Fixture tree, 129 MB of SMP-like data: **128,961,741 B to 52,163,783 B, 59.6%
-  saved**, 0 chunk diffs over ~39k audited chunks.
 - Live SMP, ~3.05M chunks, converted at compression level 1:
-  **24.99 GiB to 16.57 GiB, 33.7% saved**.
-- Same tree rewritten at level 22: **16.57 GiB to 11.04 GiB**, which is
-  **55.8% against the original Anvil size**.
+  **24.99 GiB to 16.57 GiB, 33.7% saved** vs Anvil.
+- Same tree rewritten at level 22: **16.57 GiB to 11.04 GiB (33.4% saved
+  level 1 to 22)**, which is **55.8% against the original Anvil size**.
+- SYNTHETIC fixture tree, 129 MB of SMP-like data: **128,961,741 B to
+  52,163,783 B, 59.6% saved**, 0 chunk diffs over ~39k audited chunks.
 - Boot and save walls are unchanged against Anvil on the same fixtures. Tick p99
   with players on has not been measured yet; see
   [docs/limitations.md](docs/limitations.md).
@@ -47,12 +47,13 @@ Per-dimension tables and the method behind each number are in
 # 1. Pinned base
 git clone --branch ver/26.1.x --single-branch https://github.com/PaperMC/Folia.git folia
 
-# 2. Stage this supplement into it
-cp folia-linear/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
-cp folia-linear/patches/paper-*.patch     folia/folia-server/paper-patches/features/
-mkdir -p folia/folia-server/src/test/java/net/sexidium
-cp folia-linear/tests/*.java folia/folia-server/src/test/java/net/sexidium/
-python3 folia-linear/scripts/apply-deps-hunk.py folia/folia-server/build.gradle.kts.patch
+# 2. Stage this supplement into it (version-scoped supplement for 26.1.x;
+#    pin: versions/26.1.x/upstream.properties)
+cp folia-linear/versions/26.1.x/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
+cp folia-linear/versions/26.1.x/patches/paper-*.patch     folia/folia-server/paper-patches/features/
+mkdir -p folia/folia-server/src/test/java/net/linear
+cp folia-linear/versions/26.1.x/tests/*.java folia/folia-server/src/test/java/net/linear/
+python3 folia-linear/versions/26.1.x/build-hunk.py folia/folia-server/build.gradle.kts.patch
 
 # 3. Build
 cd folia
@@ -60,7 +61,7 @@ cd folia
 # -> folia-server/build/libs/folia-paperclip-26.1.2-*.jar
 ```
 
-`apply-deps-hunk.py` splices the test source directory and the zstd-jni
+`versions/26.1.x/build-hunk.py` splices the test source directory and the zstd-jni
 dependency into Folia's own `build.gradle.kts.patch`. That file uses the
 paperweight hunk convention, which plain `git apply` cannot parse, hence the
 script. It aborts instead of guessing if the base file has drifted.
@@ -158,15 +159,19 @@ Before raising it:
 | `region-format.linear.compression-level` | same | `1` | zstd level on flush, 1-22. Out of range falls back to `1`. |
 | `region-format.linear.crash-on-broken-symlink` | same | `true` | Halts the server when a `.linear` path is a broken symlink. |
 | `region-format.linear.flush-frequency` | `paper-global.yml` | `10` | Declared, validated, **read by nothing in this release**. |
-| `region-format.linear.flush-max-threads` | `paper-global.yml` | `1` | Declared, validated, **read by nothing in this release**. |
+| `region-format.linear.flush-max-threads` | `paper-global.yml` | `1` | Declared, validated, **read by nothing in this release** (`<=1` serial). |
+| `region-format.linear.compression-workers` | `paper-global.yml` | `0` | Declared, validated, **read by nothing in this release** (`0` inert). |
+| `region-format.linear.long-distance-matching` | `paper-global.yml` | `0` | Declared, validated, **read by nothing in this release** (`0` off). |
+| `region-format.linear.log-flush-batches` | `paper-global.yml` | `false` | Declared, **read by nothing in this release** (warn-only). |
 
 - `crash-on-broken-symlink` halts on purpose: a broken symlink usually means a
   mounted volume disappeared, and continuing would silently regenerate chunks.
   Resolve symlinks before opting a world in. Setting it to `false` turns the halt
   into a warning, which is a forensics mode, not a normal setting.
-- The two flush knobs exist because the config surface mirrors Kaiiju's. There is
+- The five global Linear knobs exist because the config surface mirrors Kaiiju's
+  plus the planned Loop-4 scheduler inputs. There is
   no flush scheduler or thread pool wired to them yet, so tuning them does
-  nothing. They are still validated: `flush-frequency < 1` logs
+  nothing at defaults. They are still validated: `flush-frequency < 1` logs
   `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.`
 - Ready-to-paste snippets for all three files are in `release/`:
   `paper-world-defaults.region-format.yml`, `paper-world.region-format.yml`,
@@ -213,7 +218,7 @@ all support `--dry-run`.
 
 - `/linearstats` prints per-folder read, write, flush and load counts with
   average microseconds, plus a `TOTALS` row. Permission is
-  `sexidium.command.linearstats`, OP by default.
+  `linear.command.linearstats`, OP by default.
 - `linearstats: no Linear folders tracked (no linear I/O yet).` on an
   Anvil-only node is expected, not an error.
 - `LinearRegionFlushCompletedEvent` fires once per flush that touched at least
@@ -236,7 +241,9 @@ Details in [docs/observability.md](docs/observability.md).
 
 ## Repository layout
 
-- `patches/` - the fork itself, as paperweight feature patches.
+- `versions/26.1.x/` - the version-scoped supplement for Folia `ver/26.1.x`
+  (pin: `upstream.properties`).
+- `versions/26.1.x/patches/` - the fork itself, as paperweight feature patches.
   - `minecraft-0009` Linear core, dual-read dispatch, broken-symlink guard.
   - `minecraft-0010` crash-flag wiring and guard call sites.
   - `minecraft-0011` recreate-format support, flush policy, factory mapping,
@@ -248,10 +255,10 @@ Details in [docs/observability.md](docs/observability.md).
   - `paper-0010` `/linearstats` command, flush event, folder-name helper.
   - `paper-0011` Paper API delegate so plugins can read stats without NMS
     imports.
-- `tests/` - test sources copied into the fork's test tree: Linear round-trip,
+- `versions/26.1.x/tests/` - test sources copied into the fork's test tree: Linear round-trip,
   timing instrumentation, `/linearstats` behaviour, and the suite class that
   makes the fork's Gradle task actually run them.
-- `scripts/` - `preflight.sh` (local mirror of CI) and `apply-deps-hunk.py`.
+- `scripts/` - `preflight.sh` (local mirror of CI).
 - `release/` - `rollback.sh`, operator notes, release runbook, config templates.
 - `docs/` - architecture, configuration, benchmarks, observability, limitations.
 - `.github/workflows/build.yml` - preflight gate, then full build, tests, boot

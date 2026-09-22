@@ -76,7 +76,7 @@ The world boots, but not as intended. Fix the YAML.
 
 ### 3d. `linearstats`
 
-- `/linearstats`, no arguments. Permission `sexidium.command.linearstats`, OP by
+- `/linearstats`, no arguments. Permission `linear.command.linearstats`, OP by
   default.
 - `linearstats: no Linear folders tracked (no linear I/O yet).` on an
   Anvil-only node is expected, not a fault.

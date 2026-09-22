@@ -15,7 +15,7 @@ scripts/preflight.sh --compile  # the above, plus fork compileJava
 scripts/preflight.sh --tests    # the above, plus the Linear suites
 ```
 
-- Default `--folia-dir` is `/tmp/sexidium-folia/folia`. Pass your own with
+- Default `--folia-dir` is `/tmp/folia-linear/folia`. Pass your own with
   `scripts/preflight.sh --folia-dir /path/to/folia`.
 - `--compile` and `--tests` run Gradle in that directory and need network
   access. The plain run does not.
@@ -46,7 +46,7 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
 ## The build-file hunk
 
 `scripts/apply-deps-hunk.py` splices two things into Folia's own
-`folia-server/build.gradle.kts.patch`: the `net/sexidium` test source
+`folia-server/build.gradle.kts.patch`: the `net/linear` test source
 directory, and the zstd-jni dependency.
 
 - That file uses the paperweight hunk convention, which plain `git apply` cannot
@@ -55,17 +55,49 @@ directory, and the zstd-jni dependency.
   pristine `HEAD` copy and diffing the result against the working file.
 - It aborts on upstream drift rather than producing a plausible but wrong file.
 
+## Porting to a new MC version
+
+Each supported Folia line lives in its own `versions/<branch>/` folder with
+its own `upstream.properties` pin, `patches/`, `tests/` and `build-hunk.py`.
+Start a new line with the script, never by hand-copying:
+
+```bash
+scripts/new-version.sh 26.2.x ver/26.2.x <ref>   # copies newest folder, re-pins, runs applyAllPatches
+scripts/new-version.sh --dry-run 26.2.x ver/26.2.x <ref>  # plan only, changes nothing
+scripts/new-version.sh --help
+```
+
+Porting checklist:
+
+- Same patch name and number per feature across folders. If a fix lands as
+  `minecraft-0013` in `versions/26.1.x/patches/`, the same feature is
+  `minecraft-0013` in every other `versions/*/patches/` folder, so diffs
+  between lines stay reviewable. Renumbering one line orphans the mapping.
+- `minecraft-*.patch` goes to `minecraft-patches/features/`, `paper-*.patch`
+  to `paper-patches/features/`; the `<area>-<NNNN>-<Subject>.patch` naming and
+  hunk-count rules from Patch conventions apply verbatim in every folder.
+- `upstream.properties` carries all four keys (`FOLIA_REPO`, `FOLIA_BRANCH`,
+  `FOLIA_REF`, `MC_VERSION`). It is the single source of truth; the workflow
+  pins and `release/RELEASE.md` section 2 mirror it, they do not replace it.
+- `new-version.sh` already ran `applyAllPatches` against the new pin, so
+  rebase conflicts surfaced at copy time. Port each rejected hunk to the new
+  base, keeping behaviour identical unless the new base forces a change.
+- Run `scripts/preflight.sh` (it checks every `versions/*/` folder:
+  inventory, property completeness, hunk determinism, patch parsing, and the
+  three inherited-bug grep gates), then build the new line explicitly:
+  `scripts/build.sh --mc 26.2.x`. Plain `scripts/build.sh` builds all lines.
+
 ## Tests
 
 Test sources in `tests/` are copied into
-`folia-server/src/test/java/net/sexidium/` during staging.
+`folia-server/src/test/java/net/linear/` during staging.
 
-- `SexidiumNmsTestSuite.java` is the suite wiring. The fork's Gradle task only
+- `LinearNmsTestSuite.java` is the suite wiring. The fork's Gradle task only
   runs classes matching `**TestSuite`, so a test not reachable from the suite
   never executes.
 - New Linear tests need to be added to the suite, not just dropped in the
   directory.
-- CI runs `./gradlew :folia-server:test --tests "net.sexidium.SexidiumNmsTestSuite"`
+- CI runs `./gradlew :folia-server:test --tests "net.linear.LinearNmsTestSuite"`
   as a separate gate after the full build.
 
 ## CI

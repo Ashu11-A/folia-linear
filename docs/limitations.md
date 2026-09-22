@@ -33,10 +33,16 @@ What this release does not cover. Read it before a rollout, not after.
 
 ## Inert configuration
 
-- `region-format.linear.flush-frequency` and
-  `region-format.linear.flush-max-threads` are declared and validated but read
-  by nothing. No scheduler or thread pool is wired to them. Tuning them is a
-  silent no-op. See [configuration.md](configuration.md).
+- `region-format.linear.flush-frequency`, `region-format.linear.flush-max-threads`,
+  `region-format.linear.compression-workers`,
+  `region-format.linear.long-distance-matching` and
+  `region-format.linear.log-flush-batches` are declared and validated but read
+  by nothing at their defaults. No scheduler or thread pool is wired to them
+  yet (`paper-0012` adds the last three with inert defaults: `0`, `0`/`off`,
+  `false`). Tuning them is a silent no-op while defaults hold
+  (`flush-max-threads <= 1` stays serial, `compression-workers: 0` stays
+  serial, LDM `0` stays off, log `false` stays warn-only). See
+  [configuration.md](configuration.md).
 
 ## Rollback
 

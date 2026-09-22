@@ -8,10 +8,10 @@ for the full list of open questions.
 
 | Measurement | Before | After | Saved |
 |---|---|---|---|
-| Fixture tree, SMP-like data | 128,961,741 B | 52,163,783 B | 59.6% |
 | Live SMP, all dimensions, level 1 | 24.99 GiB | 16.57 GiB | 33.7% |
-| Live SMP region files, level 1 to 22 | 16.57 GiB | 11.04 GiB | 33.4% |
 | Live SMP, Anvil to level 22 | 24.99 GiB | 11.04 GiB | 55.8% |
+| Live SMP region files, level 1 to 22 | 16.57 GiB | 11.04 GiB | 33.4% |
+| SYNTHETIC fixture tree, SMP-like data (129 MB) | 128,961,741 B | 52,163,783 B | 59.6% |
 | Soak world | Anvil baseline | ~30% of the bytes | ~70% |
 
 Ratios depend heavily on what the world contains. Sparse dimensions compress
@@ -19,7 +19,7 @@ several times over; dense, heavily built overworlds are closer to 1.4x.
 
 ## Live SMP rollout, 2026-09-19
 
-Sexidium SMP, roughly 3.05M chunks, Folia `ver/26.1.x` at `62dc0f2`, Minecraft
+A production SMP server, roughly 3.05M chunks, Folia `ver/26.1.x` at `62dc0f2`, Minecraft
 26.1.2, Java 25.
 
 | Dimension | Anvil | Linear | Saved | % |

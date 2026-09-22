@@ -1,4 +1,4 @@
-package net.sexidium;
+package net.linear;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -12,6 +12,7 @@ import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.ChunkPos;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -27,7 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Paper-side event is absent):</p>
  * <ul>
  *   <li>{@code snapshots()} aggregation across folders,</li>
- *   <li>per-file {@code sexidium$stats()} deltas,</li>
+ *   <li>per-file {@code linear$stats()} deltas,</li>
  *   <li>P1 regression: batch of N = exactly N flush events; a failure
  *       tightens {@code filesFlushed},</li>
  *   <li>event-shape unit check if the Paper event class is visible.</li>
@@ -44,6 +45,13 @@ public class LinearStatsCommandTest {
     static void bootstrapNms() {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
+    }
+
+    @AfterEach
+    void resetCoordinator() {
+        // Minecraft-0017: age-based flush defaults to 10s; immediate-flush
+        // tests force frequency 0, cleared here (also clears pool override).
+        LinearFlushCoordinator.linear$resetFlushPoolForTests();
     }
 
     private static byte[] pattern(int length, int seed) {
@@ -104,18 +112,18 @@ public class LinearStatsCommandTest {
         Path file = dir.resolve("r.0.0.linear");
         LinearRegionFile region = new LinearRegionFile(file, COMPRESSION);
         try {
-            LinearRegionTimings.LinearRegionStats before = region.sexidium$stats();
+            LinearRegionTimings.LinearRegionStats before = region.linear$stats();
             ChunkPos pos = new ChunkPos(5, 5);
             byte[] payload = pattern(128, 9);
             region.write(pos, ByteBuffer.wrap(payload));
-            LinearRegionTimings.LinearRegionStats afterWrite = region.sexidium$stats();
+            LinearRegionTimings.LinearRegionStats afterWrite = region.linear$stats();
             assertTrue(afterWrite.write().count() >= before.write().count() + 1, "write delta >=1");
             region.flush();
-            LinearRegionTimings.LinearRegionStats afterFlush = region.sexidium$stats();
+            LinearRegionTimings.LinearRegionStats afterFlush = region.linear$stats();
             assertTrue(afterFlush.flush().count() >= afterWrite.flush().count() + 1, "flush delta >=1 (didIo guard: clean-no-op would not count)");
             byte[] back = readAll(region, pos);
             assertArrayEquals(payload, back, "round-trip");
-            LinearRegionTimings.LinearRegionStats afterRead = region.sexidium$stats();
+            LinearRegionTimings.LinearRegionStats afterRead = region.linear$stats();
             assertTrue(afterRead.read().count() >= afterFlush.read().count() + 1, "read delta >=1");
             // Folder snapshot mirrors the per-file forwarding.
             LinearRegionTimings.LinearFolderSnapshot snap = LinearFlushCoordinator.forFolder(dir).snapshot();
@@ -133,6 +141,8 @@ public class LinearStatsCommandTest {
         dir.toFile().mkdirs();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
+        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         LinearRegionFile[] files = new LinearRegionFile[n];
         try {
@@ -167,6 +177,8 @@ public class LinearStatsCommandTest {
         dir.toFile().mkdirs();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
+        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         LinearRegionFile good0 = new LinearRegionFile(dir.resolve("r.10.0.linear"), COMPRESSION);
         LinearRegionFile good1 = new LinearRegionFile(dir.resolve("r.11.0.linear"), COMPRESSION);
@@ -225,6 +237,42 @@ public class LinearStatsCommandTest {
             } catch (IOException ignored) {
             }
         }
+    }
+
+    @Test
+    public void panelDataWiresMeasurementCounters() throws IOException {
+        // Paper-0013 (panel): per-world level + time-since-last-flush via m0015.
+        // NMS side pins that the snapshot carries every field the Adventure
+        // panel displays (raw/compressed, p50/p99, millisSince, dirtyDepth);
+        // formatting (human units, bar, alignment) lives in the Paper command.
+        Path dir = this.tempDir.resolve("paneldata");
+        dir.toFile().mkdirs();
+        LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
+        coordinator.resetForTests();
+        // Force immediate so flushDirty drains (age-based default 10s).
+        LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
+        Path file = dir.resolve("r.0.0.linear");
+        LinearRegionFile region = new LinearRegionFile(file, COMPRESSION);
+        try {
+            region.write(new ChunkPos(0, 0), ByteBuffer.wrap(pattern(512, 77)));
+            coordinator.markDirty(region);
+            coordinator.flushDirty();
+        } finally {
+            try { region.close(); } catch (IOException ignored) {}
+        }
+        LinearRegionTimings.LinearFolderSnapshot snap = coordinator.snapshot();
+        assertTrue(snap.rawBytes() > 0L, "panel needs rawBytes>0");
+        assertTrue(snap.compressedBytes() > 0L, "panel needs compressedBytes>0");
+        assertTrue(snap.flushP50Micros() >= 0L, "panel needs p50");
+        assertTrue(snap.flushP99Micros() >= snap.flushP50Micros(), "panel needs p99>=p50");
+        assertTrue(snap.millisSinceLastFlush() >= 0L, "panel needs millisSince>=0");
+        assertTrue(snap.millisSinceLastFlush() < 60_000L, "millisSince recent");
+        assertEquals(0, snap.dirtyDepth(), "panel dirty bar drained (barrier joined)");
+        assertTrue(snap.filesFlushed() >= 1L, "panel files count");
+        // Bridge call site (minecraft-0019, same PATCH8): flushDirty with >=1
+        // attempted must not throw without Bukkit (sync overload catches and
+        // stays silent in NMS tests; on a server it fires the event).
+        // Reaching here without exception pins the call site is wired and safe.
     }
 
     @Test
