@@ -18,17 +18,18 @@
 - STAGING INCIDENT (this agent, quarantined, no data impact): the staging loop ran with locally-expanded empty vars (double-quoted SSH command) — first `mv` relocated the whole `minecraft/` dir into the backup, second `mv` renamed `tree/` to `minecraft/`. Net region-data effect identical to plan (small region dirs in backup, L6 tree in world, no file mixing — `mv` renames are atomic on one fs), but `convert.manifest` files landed inside the world dims and small-world `data/`+`paper-world.yml` sat in the backup. Repaired explicitly per-dim: manifests back to `level-6/tree/<dim>/`, `data/`+`paper-world.yml` back to each world dim. Verified post-repair: world dims hold L6 region/entities/poi + data + paper-world.yml, counts 2502/64/676; backup holds small region/entities + 3 configs. Pristine (snapshotted pre-move from tree content) unaffected — each run's restore re-verifies 16/16 sha. Lesson for remaining agents: single-quote SSH remote commands (or explicit per-dim commands), never loop vars under double quotes.
 - Smoke boot baseline 13:26:02Z `Done (9.681s)`, 0 fallback lines, config-readback level 6 → `level_confirmed=6`; console live-fire `linearstats` → `{"ok":true}` + baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); clean SIGTERM stop (143) afterwards, container STOPPED for b1
 
-## Runs (IN PROGRESS — 2/8: baseline b1+b2 done, b3 + 3 rc + 2 kills pending)
+## Runs (IN PROGRESS — 3/8: baseline COMPLETE, 3 rc + 2 kills pending)
 
 | run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | b1 (cold-ish) | 9.7 | 377.4 (per-chunk; 6144/6144 Changed; C1+C2 recipes; L3-log-tail head-start caveat) | n/a (never-invoked; 90s cap, 0 completion; 03-H2/H3) | -/- (baseline absent, correct) | 55 | 74.4 | 143/0 | -1 (mspt-no-response; 93 polls, 0 pairs) | heap 1386/2850, rss 5324/6140, nmt 6539, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
 | b2 (warm) | 10.5 | 355.0 (per-chunk; batched driver 21×300, staged EDITs; 4892 head-start, +300/batch to 6144 at batch 6) | n/a (never-invoked; 90s cap, 0 movement; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 77.4 | 143/0 | -1 (mspt-no-response; 95 polls, 0 pairs) | heap 2284/2990, rss 5451/6139, nmt 6515, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 13→13 (no breach) |
+| b3 (warm, last baseline) | 11.0 | 354.7 (per-chunk; batched driver 21×300, staged EDITs; 3350 head-start, +300/batch to 6144 at batch 10) | n/a (never-invoked; 90s cap, 0 movement; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 74.3 | 143/0 | -1 (mspt-no-response; 95 polls, 0 pairs) | heap 1254/2948, rss 5409/6144, nmt 6539, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 13→10 (neighbor ate 3G, no breach) |
 
-CSVs: 2 rows appended (test=6 baseline runs 1–2); sidecars in mirror `samples/6-baseline-1/` (26 files, mem-series 806) + `samples/6-baseline-2/` (25 files: panels, stats, EDITLOGs, EXPECTED, mem-series 883, tick-series, verify, tail-stop) BEFORE wipe; orphaned 16:02Z confirm-fail sidecars preserved aside at `samples/6-baseline-2-failed-confirm1605Z/` + 13:56Z invalid-shutdown log at `samples/6-baseline-2-invalid-shutdown/` (NOT part of any row). Per-run wipe done (logs/cache only, tree stays in `smp-test` volume); `free_after_wipe_gib` 13 via driver `clean_run`.
+CSVs: 3 rows appended (test=6 baseline runs 1–3); sidecars in mirror `samples/6-baseline-1/` (26 files, mem-series 806) + `samples/6-baseline-2/` (25 files, mem-series 883) + `samples/6-baseline-3/` (25 files: panels, stats, EDITLOGs, EXPECTED, mem-series 872, tick-series, verify, tail-stop) BEFORE wipe; orphaned 16:02Z confirm-fail sidecars preserved aside at `samples/6-baseline-2-failed-confirm1605Z/` + 13:56Z invalid-shutdown log at `samples/6-baseline-2-invalid-shutdown/` (NOT part of any row). Per-run wipe done (logs/cache only, tree stays in `smp-test` volume); `free_after_wipe_gib` 13 (b2) / 10 (b3 — prominence-2 neighbor dumped a 2.6G core + 400M mrpack mid-run, NOT test footprint) via driver `clean_run`.
 
 Medians (renderer-computed; warm medians for boot/load per agent 32 §6):
-`n=2 baseline provisional (NOT a level verdict): shutdown median 75.9s (74.4, 77.4) <96, no trigger; cgroup 6144.0 = 100% cap → WARN-side peak>=85% datum`
+`baseline FINAL (b1+b2+b3): shutdown median 74.4s (<96, no trigger); trigger peak>=85% (cgroup 6144.0 MiB = 100% of 6GiB). star=none yet. No unsafe level yet. Full renderer line: lvl 6, n=3, WARN, shutdown 74.4s, tick n/a, flush n/a, save n/a, cgroup 6144MiB, size 14887028404B, vs_anvil 0.571, saved_vs_#1 16.37%, why=peak>=85%. Spread: shutdown 74.3–77.4 (4% of median, shows median only); boot warm median 10.7s (b2 10.453 + b3 10.981; b1 cold-ish 9.749 excluded per §5); load warm median 354.9s (b2 355.0 + b3 354.7; b1 377.4 calibration excluded); dirty median 54 (55,54,54).`
 
 ## Evidence (run b1)
 
@@ -95,6 +96,31 @@ baseline run 1 done: boot=9.749 load=377.4 save=-1 shut=74.4 exit=143 lost=0/614
 
 `IN PROGRESS (baseline n=2 provisional — NOT a level verdict)` — shutdown median 75.9s (74.4, 77.4) <96 (no trigger); cgroup 6144.0 = 100% cap → WARN-side `peak>=85%` datum (same as L1/L3). Load 377.4→355.0 (b1 cold-ish excluded from warm medians per §5; single warm datum 355.0s so far). No ❌ (both exits 143, 0 lost, 0 failures, 0 OOM, fallback 0). STOP+REPORT triggers: none (floor 13≥8 holds, level_confirmed=6, no ❌) — CONTINUE to b3.
 
+## Run b3 (warm, last baseline) — baseline run 3 done 2026-09-23 17:01:23Z→17:26:06Z (driver `loop4-P0-mirror/l6wrap.py b3`; loopback console, NO jar swap — shadow already baseline e609c1d4)
+
+- Gates re-verified: free **13 GiB ≥ 8 floor** (host-df fallback — stopped-container exec artifact fixed in wrapper; abort <8 never triggered); lock = standing `sleep 200000` reservation (no active driver — precedent: no second lock, no break); jar baseline `e609c1d4` (shadow + node, 60532041 B); config `compression-level: 6` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; NMT **ON**; pristine 16/16 sha OK (double restore); EXPECTED-6 6144 keys + `commands-y319.txt`; patched plugin `21997aad`; `smp1_players=-1` (smp-1 STOPPED by owner, no live-log lines — honest unknown); `nbtlib` local.
+- Boot: restore 17:01:28Z → start → `Done` → `boot_s=10.981`; baseline plain panel + config 6 + 0 fallback → `level_confirmed=6` (patient-linearstats: first try clean, no retry needed).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (both passes); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=354.7` (batch-1 acks 3350 head-start from b2 log tail, +300/batch to 6144 at batch 10 proves fresh; C6 future-skipped=0); pass 2 redirty identical setblocks → all 21 BATCH_DONE, `load_s=-283.5` DISCARDED by design.
+- Settle: 60s (run 3, no autosave-watch — watch is run-1-per-jar only).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 90s capped poll, NO completion line; pre dirty + flush 0, post 2 reads zero movement (`movement=false`) → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced b1+b2+b3).
+- Flush: baseline plain panel → `flush_p50_ms=-1`, `flush_p99_ms=-1` (absent, correct per spec 33 §4); no batch lines (expected per spec 33 §3.5).
+- Shutdown: SIGTERM → exit = **74.3s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (3 markers); dirty_at_stop 54; 0 `Failed to flush`. Under 96 (no trigger).
+- Tick: 95 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as b1/b2).
+- Mem: 872 samples ~1Hz: heap steady **1254** / peak **2948** (under Xmx 3072 — NOT saturated, like b1); rss steady 5409 / peak (HWM) 6144; **nmt committed peak 6539** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only).
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-6 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk: `free_before_gib=13` (host-df fallback gate) → `free_after_wipe_gib=10` (per-run wipe: logs/cache/crash-reports only, tree stays; floor 10≥8 holds). **Neighbor note (NOT test footprint): prominence-2 (fabric, unrelated project) crashed mid-run — `core.666` 2.6G written 17:25Z + fresh 400M mrpack 17:24Z. If it dumps again during r-runs, free could approach the floor — watch per-run df, STOP on breach.**
+- Sidecars: mirror `samples/6-baseline-3/` 25 files (EDITLOGs, EXPECTED×2, panels, stats, mem-series 872, tick-series, verify, tail-stop, runner log) synced BEFORE wipe.
+
+## Baseline FINAL medians (3/3) + provisional verdict
+
+- Baseline FINAL (n=3): `lvl 6, n=3, WARN, shutdown 74.4s, why=peak>=85%` (renderer). Boot warm median 10.7s (b2 10.453 + b3 10.981; b1 cold-ish 9.749 excluded); load warm median 354.9s (b2 355.0 + b3 354.7; b1 377.4 calibration excluded); shutdown median 74.4s (74.4, 77.4, 74.3); dirty median 54 (55,54,54); lost 0+0+0; exits 143×3; flush p50/p99 absent (correct); save n/a ×3; tick -1 ×3; cgroup 6144.0 (100% cap, reclaimed, no OOM).
+- vs L1/L3 baselines: shutdown 74.4s vs 80.0 (L1) / 80.3 (L3) — **−7%, −5.6s under L1**; dirty 54 vs 55/56; load 354.9 vs 354.8/354.9 (identical, decode-independent as expected); lost 0/6144 all runs. Level-6 compresses smaller (16.37% saved vs #1) AND shuts down faster — direction favorable for the proposed default, verdict pending rc + kills.
+- `WARN (baseline FINAL n=3 — axis half COMPLETE)` — no shutdown trigger (74.4 <96); no ❌. Level verdict PENDING (need 3 rc + 2 kills). STOP+REPORT triggers: none (floor 10≥8 holds, level_confirmed=6, no ❌) — CONTINUE to r1 (first rc: swap shadow→rc2 b0ea2048 via `p0run.py swap`).
+
 ## Run b2 (warm)
 
 baseline run 2 done: boot=10.453 load=355.0 save=-1 shut=77.4 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
+
+## Run b3 (warm)
+
+baseline run 3 done: boot=10.981 load=354.7 save=-1 shut=74.3 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
