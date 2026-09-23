@@ -18,7 +18,7 @@
 - STAGING INCIDENT (this agent, quarantined, no data impact): the staging loop ran with locally-expanded empty vars (double-quoted SSH command) — first `mv` relocated the whole `minecraft/` dir into the backup, second `mv` renamed `tree/` to `minecraft/`. Net region-data effect identical to plan (small region dirs in backup, L6 tree in world, no file mixing — `mv` renames are atomic on one fs), but `convert.manifest` files landed inside the world dims and small-world `data/`+`paper-world.yml` sat in the backup. Repaired explicitly per-dim: manifests back to `level-6/tree/<dim>/`, `data/`+`paper-world.yml` back to each world dim. Verified post-repair: world dims hold L6 region/entities/poi + data + paper-world.yml, counts 2502/64/676; backup holds small region/entities + 3 configs. Pristine (snapshotted pre-move from tree content) unaffected — each run's restore re-verifies 16/16 sha. Lesson for remaining agents: single-quote SSH remote commands (or explicit per-dim commands), never loop vars under double quotes.
 - Smoke boot baseline 13:26:02Z `Done (9.681s)`, 0 fallback lines, config-readback level 6 → `level_confirmed=6`; console live-fire `linearstats` → `{"ok":true}` + baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); clean SIGTERM stop (143) afterwards, container STOPPED for b1
 
-## Runs (IN PROGRESS — 7/8: axis COMPLETE + k1 baseline SIGKILL done, k3 rc SIGKILL pending)
+## Runs (COMPLETE — 8/8: axis 6/6 + SIGKILL kill pair 2/2, OOM skipped per C7)
 
 | run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -29,6 +29,7 @@
 | r2 (rc, warm) | 9.9 | 354.6 (per-chunk; batched driver 21×300, staged EDITs; 3285 head-start, +300/batch to 6144 at batch 11) | n/a (never-invoked; 150s cap, movement 9→77 background; 03-H2/H3) | 1000/1000 (rc panel) | 41 | 71.3 | 143/0 | -1 (mspt-no-response; 99 polls, 0 pairs) | heap 1374/3072, rss 5400/6116, nmt 6402, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 10→14 (neighbor cleaned core, no breach) |
 | r3 (rc, warm, last axis) | 10.2 | 355.0 (per-chunk; batched driver 21×300, staged EDITs; 3342 head-start, +300/batch to 6144 at batch 11) | n/a (never-invoked; 150s cap, movement 9→79 background; 03-H2/H3) | 1000/1000 (rc panel) | 40 | 72.3 | 143/0 | -1 (mspt-no-response; 99 polls, 0 pairs) | heap 2524/3072, rss 5379/6134, nmt 6699, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
 | k1 (baseline SIGKILL T+30) | 10.3 | 355.6 (per-chunk; batched driver, staged EDITs) | n/a (kill row) | -/- (kill row) | 55 | 0.9 | 137/0 | -1 (kill row) | heap 2128/2128, rss 5696/5714, nmt 4968, cgroup 5926.2 | 6144/6144 (all missing, S2 tail-loss) | 13→14 (no breach) |
+| k3 (rc SIGKILL T+30) | 9.9 | 356.1 (per-chunk; batched driver, staged EDITs) | n/a (kill row) | -/- (kill row) | 55 | 0.9 | 137/0 | -1 (kill row) | heap 2300/2300, rss 5532/5666, nmt 4687, cgroup 5868.4 | 3267/6144 (53% missing, m0017 saved 47%) | 13→14 (no breach) |
 
 CSVs: 3 rows appended (test=6 baseline runs 1–3); sidecars in mirror `samples/6-baseline-1/` (26 files, mem-series 806) + `samples/6-baseline-2/` (25 files, mem-series 883) + `samples/6-baseline-3/` (25 files: panels, stats, EDITLOGs, EXPECTED, mem-series 872, tick-series, verify, tail-stop) BEFORE wipe; orphaned 16:02Z confirm-fail sidecars preserved aside at `samples/6-baseline-2-failed-confirm1605Z/` + 13:56Z invalid-shutdown log at `samples/6-baseline-2-invalid-shutdown/` (NOT part of any row). Per-run wipe done (logs/cache only, tree stays in `smp-test` volume); `free_after_wipe_gib` 13 (b2) / 10 (b3 — prominence-2 neighbor dumped a 2.6G core + 400M mrpack mid-run, NOT test footprint) via driver `clean_run`.
 
@@ -205,6 +206,18 @@ baseline run 1 done: boot=9.749 load=377.4 save=-1 shut=74.4 exit=143 lost=0/614
 
 `WARN (axis COMPLETE + k1 baseline SIGKILL data)` — axis medians unchanged (baseline `shutdown 74.4s`, rc `shutdown 72.3s`, both `why=peak>=85%`). k1 (run=91, NOT a level grade per spec 38 §3.3): exit 137, lost 6144/6144 all-missing (S1+S2 on L6), newest 47.5s (T+30 window missed by post-load steps — honest deviation). No ❌ on any SIGTERM row; no floor breach; `level_confirmed=6` every row. STOP+REPORT triggers: none — CONTINUE to k3.
 
+## Run k3 (rc SIGKILL T+30) — evidence 2026-09-23 19:42:29Z→19:55:29Z (driver `loop4-P0-mirror/l6wrap.py k_rskill`; MANUAL jar swap baseline→rc2 + STOP/START + confirm BEFORE the run, working around the `swap_jar` ordering bug — shadow `b0ea2048` verified + fresh rc boot + `confirm_level` TRUE all-dims-lvl-6; loopback console)
+
+- Gates: free **13 GiB ≥ 8 floor** (abort <8 never triggered, 13→14); lock = standing `sleep 200000` reservation (precedent); jar rc2 `b0ea2048` (shadow + node symlink, 60541066 B); config `compression-level: 6` + globals; NMT **ON**; pristine 16/16 sha OK (double restore); EXPECTED-6 6144 keys + `commands-y319.txt`; plugin `21997aad`; `smp1_players=-1` (smp-1 STOPPED by owner).
+- Boot: restore → start → `Done` → `boot_s=9.897`; rc panel `lvl 6` all dims + 0 fallback → `level_confirmed=6` (asserted inside `run_kill`).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact**; staged 6144 EDITs in 21×300 batches → `load_s=356.1` (batch-1 acks 6144/6144 — full k1-tail coverage; exact +300/batch delivery proven by 21/21 BATCH_DONE; C6 future-skipped=0).
+- Kill: `t0`=last EDIT ack 19:49:18Z → post-load steps again consumed the window (`waiting 0s to T+30`) → SIGKILL at **t0+47.8s** (same timing deviation as k1, honest) → `shutdown_s=0.9`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 2 `.linear.tmp` post-kill (nether `r.-1.0` + `r.1.1` — outside the edited r.0.0 set) — expected kill-mid-flush signatures per spec 38 §5, cleaned at close-out.
+- Safety (REAL decode-back verify, step 7): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib verifier vs EXPECTED-6 + EDITLOG: **2877 ok / 3267 missing / 0 stale / 0 unknown → `chunks_lost=3267`** (pure missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- Age analysis (the m0017 datum): EDITLOG span 19:22:34 (k1 tail, 20 stale keys) →19:49:18 (k3 t0). Saved (2877): median ack 19:45:28, newest 19:47:23. Lost (3267): median 19:47:39, newest 19:49:18 (=t0+47.8 actual kill). Per-minute lost fraction: 19:43 26% / 19:44 27% / 19:45 26% / 19:46 34% / 19:47 74% / 19:48 100% / 19:49 100% — bulk cutoff ~2 min pre-kill (same as L1/L3); max window 1651.8s from the 20 stale k1-tail keys / fresh-only window ≈404s. As-measured `loss_window_s=1651.8` / `newest_lost_age_s=47.8`.
+- m0017 assessment: DIRECTION CONFIRMED on L6 — baseline k1 lost 6144/6144 (100%), rc k3 lost 3267/6144 (53%), saved 2877 (47%) via slow per-file age-flush. Cross-level: L1 rc saved 46% / L3 rc saved 43% / L6 rc saved 47% — consistent ~2-min bulk cutoff everywhere; L6 marginally best (highest compression → smallest files → fastest per-file flush — honest n=1 observation, NOT a claim). The `≤F+skew` bar needs F's true units (open Loop-5 question from L1, NOT a ❌ — kill rows are data; level already WARN).
+- CSV: row 8 `test=6 jar=rc run=91 ... exit=137 oom=0 chunks 3267/6144 dirty=55`. Sidecars: mirror `samples/6-rc-kill-SIGKILL30/` 10 files BEFORE wipe. Per-run wipe logs/cache only; `df` 13→14, floor holds. STOP+REPORT check: none — CONTINUE to close-out (OOM rows skipped per C7, SIGKILL pair complete).
+
 ## Run b2 (warm)
 
 baseline run 2 done: boot=10.453 load=355.0 save=-1 shut=77.4 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
@@ -228,3 +241,7 @@ rc run 3 done: boot=10.238 load=355.0 save=-1 shut=72.3 exit=143 lost=0/6144 dir
 ## Run k1 baseline SIGKILL T+30
 
 kill baseline SIGKILL30: lost=6144 window=2278.5307161808014: boot=10.343 load=355.6 save=-1 shut=0.9 exit=137 lost=6144/6144 dirty=55 tick=-1 cgroup_peak=5926.2
+
+## Run k3 rc SIGKILL T+30
+
+kill rc SIGKILL30: lost=3267 window=1651.8431289196014: boot=9.897 load=356.1 save=-1 shut=0.9 exit=137 lost=3267/6144 dirty=55 tick=-1 cgroup_peak=5868.4
