@@ -211,3 +211,19 @@ rc run 3 done: boot=12.2 load=355.9 save=-1 shut=70.4 exit=143 lost=0/6144 dirty
 ## Provisional verdict (rules: scripts/render-stress-table.py header)
 
 `⚠️ WARN (baseline FINAL n=3 + rc FINAL n=3 — axis COMPLETE)` — baseline `shutdown 80.0s, why=peak>=85%`; rc `shutdown 70.4s, why=peak>=85%`. No shutdown trigger (both <96); no ❌. Level verdict PENDING (need 4 kills: k_bskill/k_boom/k_rskill/k_room per spec 38 matrix, EDITLOG + chunks-lost-verify, loss_window_s). Tree stays in `smp-test` volume for kills; `level-1/` holds manifests + pristine + EXPECTED + commands + backups.
+
+## Run k1 baseline SIGKILL T+30
+
+kill baseline SIGKILL30: lost=6144 window=2263.0001282691956: boot=11.64 load=356.5 save=-1 shut=0.9 exit=137 lost=6144/6144 dirty=54 tick=-1 cgroup_peak=6144.0
+
+## Run k1 (baseline SIGKILL T+30) — evidence 2026-09-23 04:07:33Z→04:19:55Z (driver `loop4-P0-mirror/l1run.py k_bskill`; jar swap rc2→baseline `P.swap_jar` CACHED e609c1d4 OK, boot 11.885s)
+
+- Gates: free **11 GiB ≥ 8 floor** (abort <8 never triggered, 11→11); lock = idle `sleep 200000` reservation (PID 3159562, axis precedent: no second lock, no break); jar baseline `e609c1d4` (shadow + node, swapped from rc2 before run); config `compression-level: 1` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; pristine 16/16 sha OK (double restore: pre-run unmeasured-stop restore + `run_kill` restore); EXPECTED 6144 keys + `commands-y319.txt`; patched plugin `21997aad`; `smc.py` staged; `smp1_players=0`; NMT **ON**; `nbtlib` local + `worker-1`.
+- Boot: restore → start → `Done` → `boot_s=11.64`; 0 `[region-format]` fallback → `level_confirmed=1` (baseline 3-source rule).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact**; staged 6144 EDITs in 21×300 batches → `load_s=356.5` (batch-1 acks 2478 head-start from r3 log tail, +300/batch to 6144 at batch 14 proves fresh; C6 future-skipped=0 all batches; same head-start mechanism as b2/b3/r1/r2/r3).
+- Kill: `t0`=last EDIT ack 04:14:01Z → wait 3s → `docker kill -s SIGKILL sexidium-smp-test` at T+30 → `shutdown_s=0.9` (instant), `ExitCode=137` clean-kill, `OOMKilled=false` (captured BEFORE restart). Tail: no clean markers (no `Stopping server`, expected for SIGKILL), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 2 `.linear.tmp` post-kill (`the_nether/region/r.1.-1`, `r.0.1` — outside the edited r.0.0 set) — expected kill-mid-flush signature per spec 38 §5, recorded not failures; absent before kill (0), cleaned at close-out.
+- Safety (REAL decode-back verify, step 7): post-kill fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED + EDITLOG: **0 ok / 6144 missing / 0 stale / 0 unknown → `chunks_lost=6144`** — pure S2 tail-loss signature (all missing, zero stale = no cross-run contamination in blocks). `flush_failures=0`; `level_fallback_severe=0`.
+- EDITLOG staleness audit (honest, sidecars immutable): 6144 keys span 2233s (min ack 03:36:48Z = r3 load, max 04:14:01Z = k1 t0); **6124 fresh** (within run) + **20 stale** (r3 tail, last-batch feedback lag — same mechanism as r2 batches 15–21). As-measured `loss_window_s=2263.0` (20 stale keys) / `newest_lost_age_s=30.0` (=T+30 fresh tail ✓). Fresh-only recomputation: max age **358s** (≈ load 356.5 + T) over 6124 fresh keys, ALL lost. Baseline S1+S2 CONFIRMED: SIGKILL loses everything including edits acked 30s before kill.
+- CSV: row 7 `test=1 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=54`. Sidecars: mirror `samples/1-baseline-kill-SIGKILL30/` 9 files (EDITLOG×2, EXPECTED×2, boot panel, mem-prekill, tail-kill, verify, wool-ids) synced BEFORE wipe. Per-run wipe: logs/cache/crash only (tree stays); `df` 11→11, floor holds.
+- STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=1) — CONTINUE to k2 (baseline OOM, no swap).
