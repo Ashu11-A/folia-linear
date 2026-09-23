@@ -1,0 +1,16 @@
+# Level 09 — baseline × 3 + rc2 × 3 + 2 SIGKILL rows — IN PROGRESS
+
+- `test=9` `level_confirmed=9` (3-source: config `compression-level: 9` in `paper-world-defaults.yml` + header audit 8383/8383 lvl=9 at offset 17 + 0 `[region-format]` fallback lines; baseline panel has no `lvl` token per paper-0010, rc token pending)
+- `jar=baseline` `jar_sha256=e609c1d439e7bdd68e68abccbcf02c818efe77fa4ae8d7ddc2914204ca0ee06b` (60532041 B, host `stress/jars/folia-baseline.jar` + shadow-server identical, verified 2026-09-23)
+- `jar=rc2` `jar_sha256=b0ea20484d85e4adce697cb786bf164b6fa4865d9eb122b8c931910e2723e1d6` (60541066 B, host `stress/jars/folia-rc2.jar`, verified 2026-09-23)
+- `ldm=0` `flush_threads=1` `compression_workers=0` (axis-1 defaults)
+- `bytes_anvil=26056405704` (frozen constant, S2-finalize 2026-09-22; NOT re-derived, source-anvil read-only)
+- `convert_s=911` (t0 20:34:01Z→t1 20:49:12Z; per-dim walls 672.7+23.0+87.2=782.9s, threads 4/1/1, empty `level-9/` dir, ≤8 threads)
+- `bytes_on_disk=14444960206` (≈13.45 GiB; OW 14107297350 + nether 136693910 + end 200968946 out-bytes; per-folder `du -sb` minus manifests 2270381; ratio vs Anvil 0.5544, 44.56% saved; saved vs #1 18.86%)
+- Conversion (`mca2linear -c 9` per-dim via host helper `level9-convert` on bind-mounted build volume, python:3.13-slim + pyzstd): OW 7382 files in=23318872064 out=14107297350 ratio=0.605 wall=672.7s; nether 117 files in=274874368 out=136693910 ratio=0.497 wall=23.0s; end 884 files in=2462646272 out=200968946 ratio=0.082 wall=87.2s; all `EXIT=0`, `DONE-ALL`; 0 `.mcc`; free 27G→14G (floor 14≥8 PASS)
+- Verify (decode-back workaround, harness `verify_level` broken by construction): header audit 8383/8383 lvl=9 bad=0 (offset 17, `>QBQbhI` field 4); manifest src_sha cross-check 7382+117+884=8383/8383 mism=0 missing=0 extra=0 (`level-9` convert.manifest `src_sha` == source-anvil decode `dst_sha`, joined on `.mca` rel); forceload-subset (16 pristine files) `linear2mca` + `verify` per-dim 12/2/2 files all `total diffs=0` (temp mini dirs wiped)
+- Pristine: 16 files (OW 4×(region+entities+poi)=12 + nether 2 + end 2) + `pristine.sha256` 16 lines; `EXPECTED.json` 6144 keys (edit-workload.py gen --level 9, sha scheme `sha256("dim|cx|cz|mat|level")` verified on sample key) + `commands-y319.txt` 6144 setblocks (4096 OW @319, zero 320) + `commands.txt` copy staged (mirror `level-9/`)
+- Staging (move, not copy — same `/dev/sda6`, rename instant): backed up small world + configs to `level-9/smp-test-small-backup`; moved 8 dirs `level-9/tree/{dims}/{region,entities,poi}` → `smp-test/.../dimensions/minecraft/...` (world region counts OW 2502 / nether 64 / end 676); `TREE` left with manifests only; set `compression-level: 6→9`, `log-flush-batches: false→true`; appended NMT to `sexidium-node.args`. Explicit per-dim `mv` commands (single-quoted SSH, no loop vars — L6 staging lesson honored)
+- Smoke boot baseline 20:59Z `Done (10.189s)`, 0 fallback lines, config-readback level 9 → `level_confirmed=9`; console loopback `linearstats` → baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); smc.py `bff98d8c` + smc_batch.py `a2b7376b` (persisted L6 layer, shas re-verified); clean SIGTERM stop (143) afterwards, container STOPPED for b1
+
+## Runs (IN PROGRESS — 0/8)
