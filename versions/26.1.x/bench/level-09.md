@@ -18,6 +18,25 @@
 | run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | b1 (cold-ish) | 10.2 | 355.8 (per-chunk; batched driver 21×300, staged EDITs; 6144/6144 acks EDITLOG-1+2; C6 guard armed) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 75.2 | 143/0 | -1 (mspt-no-response; 100 polls, 0 pairs) | heap 2108/2960, rss 5385/6138, nmt 6493, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
+| b2 (warm) | 10.6 | 354.4 (per-chunk; batched driver 21×300, staged EDITs; 3339 head-start, +300/batch to 6144 at batch 11; C6 future-skipped=0) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 79.3 | 143/0 | -1 (mspt-no-response; 95 polls, 0 pairs) | heap 2526/3072, rss 5378/6146, nmt 6535, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
+
+## Evidence (run b2)
+
+- Boot: restore 21:29Z (16/16 sha OK, double restore: pre-run unmeasured-stop restore + `run_axis` restore) → start → `Done` → `boot_s=10.611`; baseline plain panel + config 9 + 0 fallback → `level_confirmed=9` (patient-linearstats: first try clean, no retry needed)
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (both passes); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=354.4` (batch-1 acks 3339 head-start from b1 log tail, +300/batch to 6144 at batch 11 proves fresh; C6 future-skipped=0 all 21 batches); pass 2 redirty identical setblocks → all 21 BATCH_DONE, pass-2 timing DISCARDED by design
+- Settle: 60s (run 2, no autosave-watch — watch is run-1-per-jar only)
+- Save-all: `save-all flush` POST → `{"ok":true}`; 90s capped poll, NO completion line; movement=false → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced b1+b2)
+- Flush: baseline plain panel → `flush_p50_ms=-1`, `flush_p99_ms=-1` (absent, correct per spec 33 §4); no batch lines (expected per spec 33 §3.5)
+- Shutdown: SIGTERM → exit = **79.3s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (3 markers); dirty_at_stop 54; 0 `Failed to flush`. Under 96 (no trigger)
+- Tick: 95 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as b1)
+- Mem: 912 samples ~1Hz: heap steady **2526** / peak **3072** (= Xmx, saturated, no ExitOnOOM — exit 143 proves it); rss steady 5378 / peak (HWM) 6146; **nmt committed peak 6535** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only)
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-9 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`**. `flush_failures=0`; `level_fallback_severe=0`
+- Disk: `free_before_gib=14` → `free_after_wipe_gib=14` (per-run wipe: logs/cache/crash-reports only, tree stays; floor holds)
+- Sidecars: mirror `samples/9-baseline-2/` (EDITLOGs, EXPECTED×2, panels, stats, mem-series 912, tick-series, verify, tail-stop, runner log `l9-b2.runner.log`) — driver writes mirror-direct
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (baseline n=2 provisional — NOT a level verdict)` — shutdown median 77.3s (75.2, 79.3) <96 (no trigger); cgroup 6144.0 = 100% cap → WARN-side `peak>=85%` datum (same as L1/L3/L6). Load 355.8→354.4 (b1 cold-ish excluded from warm medians per §5; single warm datum 354.4s so far). No ❌ (both exits 143, 0 lost, 0 failures, 0 OOM, fallback 0). STOP+REPORT triggers: none (floor 14≥8 holds, level_confirmed=9, no ❌) — CONTINUE to b3.
 
 ## Evidence (run b1)
 
@@ -40,3 +59,7 @@
 ## Run b1 (cold-ish)
 
 baseline run 1 done: boot=10.236 load=355.8 save=-1 shut=75.2 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
+
+## Run b2 (warm)
+
+baseline run 2 done: boot=10.611 load=354.4 save=-1 shut=79.3 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
