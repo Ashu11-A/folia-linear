@@ -20,6 +20,27 @@
 | b1 (cold-ish) | 10.2 | 355.8 (per-chunk; batched driver 21×300, staged EDITs; 6144/6144 acks EDITLOG-1+2; C6 guard armed) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 75.2 | 143/0 | -1 (mspt-no-response; 100 polls, 0 pairs) | heap 2108/2960, rss 5385/6138, nmt 6493, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
 | b2 (warm) | 10.6 | 354.4 (per-chunk; batched driver 21×300, staged EDITs; 3339 head-start, +300/batch to 6144 at batch 11; C6 future-skipped=0) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 79.3 | 143/0 | -1 (mspt-no-response; 95 polls, 0 pairs) | heap 2526/3072, rss 5378/6146, nmt 6535, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
 | b3 (warm, last baseline) | 10.2 | 354.4 (per-chunk; batched driver 21×300, staged EDITs; 3387 head-start, +300/batch to 6144 at batch 11; C6 future-skipped=0) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 77.2 | 143/0 | -1 (mspt-no-response; 95 polls, 0 pairs) | heap 1556/3072, rss 5441/6132, nmt 6579, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
+| r1 (rc, warm, autosave-watch) | 10.2 | 351.9 (per-chunk; batched driver 21×300, staged EDITs; 3167 head-start, +300/batch to 6144 at batch 11; C6 future-skipped=0) | n/a (never-invoked; 150s cap, movement 9→82 background; 03-H2/H3) | 1000/1000 (rc panel; OW+nether region 1000, entities 10–25, end region 50/250) | 37 | 72.4 | 143/0 | -1 (mspt-no-response; 103 polls, 0 pairs) | heap 1304/3072, rss 5348/6137, nmt 6444, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
+
+## Run r1 (rc, autosave-watch) — rc run 1 done 2026-09-23 22:28Z→22:55Z (driver `loop4-P0-mirror/l9wrap.py rc1`, FIRST rc run — jar swap baseline→rc2 included; loopback console)
+
+- Swap (rc1 only): host-fetch rc2 `CACHED b0ea20484d85` (jars pre-staged, no :ro write) → `sha256sum -c` `rc.jar: OK` → cp to shadow + node jars → swap-boot 10.907s (ATTRIBUTION: `swap_jar` cps AFTER start, so this Done belongs to the pre-swap baseline boot — same ordering bug as L6 r1/k1; the true rc boot is the AXIS `boot_s=10.178`). Live stack untouched (live stays STOPPED by owner).
+- Gates re-verified: free **14 GiB ≥ 8 floor** (abort <8 never triggered, 14→14); lock = standing `sleep 200000` reservation (precedent: no second lock, no break); config `compression-level: 9` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; pristine 16/16 sha OK (double restore); EXPECTED-9 6144 keys + `commands-y319.txt`; patched plugin `21997aad`; NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.178`; rc panel `lvl 9` on all 3 dims + 0 `[region-format]` fallback → `level_confirmed=9` (spec 32 §4 rc source).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (both passes); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=351.9` (batch-1 acks 3167 head-start from b3 log tail, +300/batch to 6144 at batch 11 proves fresh; C6 future-skipped=0); pass 2 redirty identical setblocks → all 21 BATCH_DONE, pass-2 timing DISCARDED by design.
+- Age-wait (autosave-watch, run-1 per jar): 15s (rc age gate) + 65s, flush 9→9 + dirty 55→55 → `autosave_reaches_flush=false`. Periodic age-flush (m0017) did NOT move counters in this settle window — the dirty drop below comes later (save window + shutdown drain).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 150s capped poll, NO completion line; pre dirty 55 + flush 9, post flush 82 (movement true = background age-flush, NOT save-all effect) → `save_all_s=n/a (never-invoked)` per spec 33 §7 (cite 03-H2, 03-H3; C3 reproduced on rc — save-all still no completion line even with m0017/counters).
+- Flush: rc panel (9 folders, all `lvl 9`): prestop dirty **37** vs baseline median 54 — **−31%**; overall `flush_p50/p99=1000/1000ms` (OW + nether region 1000/1000; entities 10–25, end region 50/250); `flush_failures=0`.
+- Shutdown: SIGTERM → exit = **72.4s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (3 markers); dirty_at_stop 37; 0 `Failed to flush`. Under 96 (no trigger; **4.8s under the baseline median 77.2s**).
+- Tick: 103 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as all prior runs).
+- Mem: 988 samples ~1Hz: heap steady **1304** / peak **3072** (= Xmx, saturated, no ExitOnOOM — exit 143 proves it); rss steady 5348 / peak (HWM) 6137; **nmt committed peak 6444** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only).
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-9 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk: `free_before_gib=14` → `free_after_wipe_gib=14` (per-run wipe: logs/cache/crash-reports only, tree stays in `smp-test` volume for r2/r3; floor holds).
+- Sidecars: mirror `samples/9-rc-1/` (EDITLOGs, EXPECTED×2, panels incl. autosave-watch, stats, mem-series 988, tick-series, verify, tail-stop, runner log `l9-rc1.runner.log`) — driver writes mirror-direct.
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`WARN (baseline FINAL n=3 unchanged + rc n=1 provisional)` — baseline medians stay `lvl 9, n=3, WARN, shutdown 77.2s, why=peak>=85%`. rc r1 provisional (NOT a level verdict): shutdown 72.4s <96, dirty 37 (−31% vs baseline 54), lost 0, exit 143, 0 failures — direction matches the m0017 age-flush expectation (cut dirty; shutdown delta pending n=3) but n=1 proves nothing yet; need r2+r3 + 2 kills. No ❌ (single ❌ would mark the level — none seen). STOP+REPORT triggers: none (floor 14≥8 holds, level_confirmed=9, no ❌) — CONTINUE to r2.
 
 ## Evidence (run b2)
 
@@ -89,3 +110,7 @@ baseline run 2 done: boot=10.611 load=354.4 save=-1 shut=79.3 exit=143 lost=0/61
 ## Run b3 (warm)
 
 baseline run 3 done: boot=10.169 load=354.4 save=-1 shut=77.2 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
+
+## Run r1 (rc, autosave-watch)
+
+rc run 1 done: boot=10.178 load=351.9 save=-1 shut=72.4 exit=143 lost=0/6144 dirty=37 tick=-1 cgroup_peak=6144.0
