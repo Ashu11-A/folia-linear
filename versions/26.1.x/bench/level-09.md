@@ -13,4 +13,30 @@
 - Staging (move, not copy — same `/dev/sda6`, rename instant): backed up small world + configs to `level-9/smp-test-small-backup`; moved 8 dirs `level-9/tree/{dims}/{region,entities,poi}` → `smp-test/.../dimensions/minecraft/...` (world region counts OW 2502 / nether 64 / end 676); `TREE` left with manifests only; set `compression-level: 6→9`, `log-flush-batches: false→true`; appended NMT to `sexidium-node.args`. Explicit per-dim `mv` commands (single-quoted SSH, no loop vars — L6 staging lesson honored)
 - Smoke boot baseline 20:59Z `Done (10.189s)`, 0 fallback lines, config-readback level 9 → `level_confirmed=9`; console loopback `linearstats` → baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); smc.py `bff98d8c` + smc_batch.py `a2b7376b` (persisted L6 layer, shas re-verified); clean SIGTERM stop (143) afterwards, container STOPPED for b1
 
-## Runs (IN PROGRESS — 0/8)
+## Runs (IN PROGRESS — 1/8: baseline b1 done)
+
+| run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| b1 (cold-ish) | 10.2 | 355.8 (per-chunk; batched driver 21×300, staged EDITs; 6144/6144 acks EDITLOG-1+2; C6 guard armed) | n/a (never-invoked; 90s cap, movement=false; 03-H2/H3) | -/- (baseline absent, correct) | 54 | 75.2 | 143/0 | -1 (mspt-no-response; 100 polls, 0 pairs) | heap 2108/2960, rss 5385/6138, nmt 6493, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 14→14 (no breach) |
+
+## Evidence (run b1)
+
+- Boot: restore (16/16 sha OK) → start → `Done` → `boot_s=10.236`; baseline plain panel (9 folders, `dirtyDepth`, no lvl/p50/p99 — C4) + config-readback 9 + 0 `[region-format]` fallback → `level_confirmed=9`; jar baseline `e609c1d4` (shadow + symlink); `smp1_players=-1` (live STOPPED by owner, no live-log lines — honest unknown); `started_at=2026-09-23T21:01:24Z`
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (asserted in-driver); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=355.8` (EDITLOG-1 6144 keys; exact batch delivery proven by 21/21 BATCH_DONE asserted in-driver + 0-lost verify below); pass 2 redirty identical setblocks → EDITLOG-2 6144 keys, pass-2 timing DISCARDED by design; `load_evidence=per-chunk`; `tail-stop.txt` shows `Could not set the block` spam ×1456 under high cgroup (same pattern as L1 b3/L6 b2) but delivery proven by BATCH_DONE + verify
+- Age-wait (autosave-watch, run-1 baseline): 15s + 65s, flush 0→0 + dirty 54→54 → `autosave_reaches_flush=false` (S1 reproduced on L9: steady-state no-flush on baseline)
+- Save-all: `save-all flush` POST → `{"ok":true}`; 90s capped poll, NO completion line → `save_all_s=n/a (never-invoked)` per spec 33 §7 (cite 03-H2, 03-H3, 02-Unknowns); movement=false (C3 reproduced on L9)
+- Flush: baseline plain panel → `flush_p50_ms=-1`, `flush_p99_ms=-1` (absent, correct per spec 33 §4); no batch lines (expected per spec 33 §3.5)
+- Shutdown: SIGTERM → exit = **75.2s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (`Stopping server`, `Saved all worlds`, `All RegionFile I/O tasks`); dirty_at_stop 54; 0 `Failed to flush`. Under 96 (no trigger)
+- Tick: 100 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as L1/L3/L6)
+- Mem: 946 samples ~1Hz: heap steady **2108** / peak **2960** (under Xmx 3072 — NOT saturated); rss steady 5385 / peak (HWM) 6138; **nmt committed peak 6493** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only, same precedent)
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs staged EXPECTED-9 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`** (`verify.json` in mirror). `flush_failures=0`; `level_fallback_severe=0`
+- Disk: `free_before_gib=14` → `free_after_wipe_gib=14` (per-run wipe: logs/cache/crash-reports only, tree stays; floor holds)
+- Sidecars: mirror `samples/9-baseline-1/` 26 files (EDITLOGs, EXPECTED×2, panels incl. autosave-watch, stats, mem-series 946, tick-series, verify, tail-stop) — driver writes mirror-direct, no separate sync needed
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (b1 only, n=1 — NOT a level verdict)` — shutdown 75.2s <96 (no trigger); cgroup 6144.0 = 100% cap → WARN-side `peak>=85%` datum when renderer runs (same as L1/L3/L6). No ❌ (exit 143, 0 lost, 0 failures, 0 OOM, fallback 0). STOP+REPORT triggers: none (floor 14≥8 holds, level_confirmed=9, no ❌) — CONTINUE to b2.
+
+## Run b1 (cold-ish)
+
+baseline run 1 done: boot=10.236 load=355.8 save=-1 shut=75.2 exit=143 lost=0/6144 dirty=54 tick=-1 cgroup_peak=6144.0
