@@ -201,3 +201,19 @@ kill baseline SIGKILL30: lost=6144 window=2194.000123023987: boot=10.154 load=36
 - EDITLOG staleness audit: 6144 keys span 2164s (min 11:38:53Z = r3 load tail, max 12:14:57Z = k1 t0); **6124 fresh** + **20 stale** (same r3-tail lag mechanism as L1 k1). As-measured `loss_window_s=2194.0` (20 stale keys) / `newest_lost_age_s=30.0` (=T+30 fresh tail ✓). Fresh-only window ≈392s (≈ load 361.5 + T) over 6124 fresh keys, ALL lost. Baseline S1+S2 CONFIRMED on L3: SIGKILL loses everything including edits acked 30s before kill.
 - CSV: row 15 `test=3 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=55`. Sidecars: mirror `samples/3-baseline-kill-SIGKILL30/` 9 files BEFORE wipe. Per-run wipe logs/cache only; `df` 12→12, floor holds.
 - STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=3) — CONTINUE to k3 (rc SIGKILL, swap baseline→rc2 first).
+
+## Run k3 rc SIGKILL T+30
+
+kill rc SIGKILL30: lost=3486 window=1285.0001227855682: boot=10.131 load=367.7 save=-1 shut=1.1 exit=137 lost=3486/6144 dirty=55 tick=-1 cgroup_peak=6092.2
+
+## Run k3 (rc SIGKILL T+30) — evidence 2026-09-23 12:29:12Z→12:41:47Z (driver `loop4-P0-mirror/l3run.py k_rskill`; jar swap baseline→rc2 `P.swap_jar` CACHED b0ea2048 OK, boot 10.302s — manual, same `l3run` no-swap gap as k1)
+
+- Gates: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation; jar rc2 `b0ea2048`; config level 3 + globals; pristine 16/16 sha OK; EXPECTED-3 6144; plugin `21997aad`; `smp1_players=0`; NMT on.
+- Boot: restore → start → `Done` → `boot_s=10.131`; rc panel `lvl 3` all dims + 0 fallback → `level_confirmed=3`.
+- Load: forceload 4096/1024/1024 exact; 6144 EDITs → `load_s=367.7` with full batch-1 head-start (6144/6144 at batch 1 from the k1 log tail 15 min earlier — cumulative-scan artifact; timestamps refresh to fresh through batch 21, C6 future-skipped=0; delivery proven by 21/21 BATCH_DONE + verify split below).
+- Kill: `t0`=last ack 12:35:52Z → wait 1s → SIGKILL at T+30 → `shutdown_s=1.1`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 3 `.linear.tmp` post-kill (nether `r.1.-1` NEW + `r.1.0` persisting from k1 + `r.-1.1`; all outside edited r.0.0) — expected kill-mid-flush signatures per spec 38 §5, cleaned at close-out.
+- Safety (REAL decode-back verify): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3 + EDITLOG: **2658 ok / 3486 missing / 0 stale / 0 unknown → `chunks_lost=3486`** (57% lost, pure missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- Age analysis (the m0017 datum): EDITLOG 12:30:30→12:35:52. Saved (2658): median ack 12:31:55, newest 12:33:53. Lost (3486): median 12:34:10, newest 12:35:52 (=T+30 fresh tail, lost). Per-minute lost fraction: min0 100% (444/444) / min1 100% (1180/1180) / min2 63% / min3 34% / min4 36% / min5 37% / min6 33% — bulk cutoff ~2 min pre-kill (everything in the last ~2 min lost; minutes 2–6 mixed ~1/3). As-measured `loss_window_s=1285.0` (20 stale k1-tail keys at min21) / fresh-only 3466 keys window **368.0s** / `newest_lost_age_s=30.0`.
+- m0017 assessment: DIRECTION CONFIRMED on L3 — baseline k1 lost 6144/6144 (100%), rc k3 lost 3486/6144 (57%), saved 2658 (43%) via slow per-file age-flush. Same ~2-min bulk cutoff as L1 k3 (L1: rc saved 46%, cutoff ~2 min). The `≤F+skew` bar needs F's true units (open Loop-5 question from L1, NOT a ❌ — kill rows are data; level already WARN).
+- CSV: row 16 `test=3 jar=rc run=91 ... exit=137 oom=0 chunks 3486/6144 dirty=55`. Sidecars: mirror `samples/3-rc-kill-SIGKILL30/` 9 files BEFORE wipe. Per-run wipe logs/cache only; `df` 12→12, floor holds. STOP+REPORT check: none — CONTINUE to close-out (OOM rows skipped per C7, SIGKILL pair complete).
