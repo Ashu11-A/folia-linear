@@ -132,3 +132,26 @@ baseline run 3 done: boot=10.44 load=355.1 save=-1 shut=76.3 exit=143 lost=0/614
 ## Run r1 (rc, autosave-watch)
 
 rc run 1 done: boot=10.395 load=355.7 save=-1 shut=72.5 exit=143 lost=0/6144 dirty=39 tick=-1 cgroup_peak=6144.0
+
+## Run r2 (rc)
+
+rc run 2 done: boot=10.106 load=360.2 save=-1 shut=66.4 exit=143 lost=0/6144 dirty=37 tick=-1 cgroup_peak=6144.0
+
+## Run r2 (rc, warm) — rc run 2 done 2026-09-23 11:05:55Z→11:30:04Z (driver `loop4-P0-mirror/l3run.py rc2`; NO jar swap — shadow already rc2 b0ea2048 since r1; REDO of the 09:15Z attempt cancelled mid-run, whose partial sidecars were moved aside to `samples/3-rc-2-invalid-0940Z/` and contribute no row)
+
+- Gates re-verified: free **12 GiB ≥ 8 floor** (abort <8 never triggered, 12→12); lock = standing `sleep 200000` reservation (PID 3159562, no active driver — no second lock, no break); jar rc2 `b0ea2048` (shadow + node jars, no swap); config `compression-level: 3` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; pristine 16/16 sha OK (double restore: pre-run unmeasured-stop restore + `run_axis` restore); EXPECTED-3 6144 keys + `commands-y319.txt`; plugin `21997aad` (established); console via worker-2; `smp1_players=0` (live-log read, no live command); NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.106`; rc panel `lvl 3` on all 3 dims (overworld/the_end/the_nether) + 0 `[region-format]` fallback → `level_confirmed=3` (spec 32 §4 rc source).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (both passes); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=360.2` (batch-1 acks 3504 head-start from r1 log tail, exact +300/batch fresh growth to 6144 at batch 10 proves fresh; C6 future-skipped=0 all 21 batches; ~1.4% above the 354.5–355.7 band — honest batch-cadence variance, no correction); pass 2 redirty identical setblocks → all 21 BATCH_DONE, `load_s=-287.7` DISCARDED by design (pass-2 acks stale-dominated; delivery proven by BATCH_DONE + 0-lost verify below).
+- Settle: 60s (run 2, no autosave-watch — watch is run-1-per-jar only).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 150s capped poll, NO completion line; pre dirty + flush 9, post flush 27 (movement true = background age-flush, NOT save-all effect) → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced b1+b2+b3+r1).
+- Flush: rc panel (9 folders, all `lvl 3`): prestop dirty **37** (OW ent 13 + OW region 10 + end ent 3 + end region 6 + nether ent 4 + nether region 1) vs r1 39 / baseline 56 — **−34% vs baseline**; overall `flush_p50/p99=1000/1000ms`; `flush_failures=0`.
+- Shutdown: SIGTERM → exit = **66.4s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (`Stopping server`, `Saved all worlds`, `All RegionFile I/O tasks`); dirty_at_stop 37; 0 `Failed to flush`. Under 96 (no trigger; **13.9s under the baseline median 80.3s, 6.1s under r1**).
+- Tick: 93 `mspt` polls, **0 response blocks** → `tick_p99_ms=-1` reason `mspt-no-response` (same as b2/b3/r1; sidecars `mspt.txt` + `tick-series-*.json` 0 pairs + `tick-cooked.json`).
+- Mem: 854 samples ~1Hz: heap steady **1238** / peak **3072** (= Xmx, saturated); rss steady 5214 / peak (HWM) 6112; **nmt committed peak 6535** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only, same as b1/b2/b3/r1 precedent).
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-3 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`** (`verify.json` in mirror `samples/3-rc-2/`). `flush_failures=0`; `level_fallback_severe=0`.
+- Disk: `free_before_gib=12` → `free_after_wipe_gib=12` (per-run wipe: logs/cache/crash-reports only, tree stays in `smp-test` volume for r3; df assert 12→12, floor holds).
+- Sidecars: mirror `samples/3-rc-2/` 24 files (EDITLOGs, EXPECTED×2, panels, stats, mem-series 854, tick-series, verify, tail-stop; no autosave-watch — run 2) synced BEFORE wipe (driver writes direct to mirror; host `clean_run` only touches logs/cache).
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (baseline FINAL n=3 unchanged + rc n=2 provisional)` — baseline medians stay `shutdown 80.3s, why=peak>=85%` (renderer line above untouched). rc provisional n=2 (NOT a level verdict): shutdown median 69.5s (72.5, 66.4) <96, dirty 39→37 (−30%→−34% vs baseline 56), load median 358.0s (355.7, 360.2), boot median 10.3s (10.395, 10.106), lost 0+0, exits 143+143, 0 failures — m0017 age-flush direction holds across both rc runs; need r3 + 2 kills. No ❌ (single ❌ would mark the level — none seen). STOP+REPORT triggers: none (floor 12≥8 holds, level_confirmed=3, no ❌) — CONTINUE to r3.
