@@ -184,3 +184,20 @@ rc run 3 done: boot=10.399 load=371.7 save=-1 shut=84.4 exit=143 lost=0/6144 dir
 ## Provisional verdict (rules: scripts/render-stress-table.py header)
 
 `WARN (baseline FINAL n=3 + rc FINAL n=3 — axis COMPLETE)` — baseline `shutdown 80.3s, why=peak>=85%`; rc `shutdown 72.5s, why=peak>=85%`. No shutdown trigger (both <96); no ❌. Level verdict PENDING (need 2 kills: k_bskill/k_rskill per L3 charter, SIGKILL T+30 only, EDITLOG + chunks-lost-verify, loss_window_s). Tree stays in `smp-test` volume for kills; `level-3/` holds manifests + pristine + EXPECTED + commands + backups.
+
+## Run k1 baseline SIGKILL T+30
+
+kill baseline SIGKILL30: lost=6144 window=2194.000123023987: boot=10.154 load=361.5 save=-1 shut=1.0 exit=137 lost=6144/6144 dirty=55 tick=-1 cgroup_peak=5794.5
+
+## Run k1 (baseline SIGKILL T+30) — evidence 2026-09-23 12:08:21Z→12:20:49Z (driver `loop4-P0-mirror/l3run.py k_bskill`; jar swap rc2→baseline `P.swap_jar` CACHED e609c1d4 OK, boot 10.699s)
+
+- Driver gap (honest, Loop-5 input): `l3run.py k_bskill` does NOT swap the jar (unlike `l1run.py` k1) — first attempt booted rc2 against a `jar=baseline` expectation and died in `confirm_level` BEFORE any EDIT (no row; world left pristine-restored, server idle; its lone `linearstats-boot.txt` moved aside to `samples/3-baseline-kill-SIGKILL30-failed-noswap/`). Manual `P.swap_jar("baseline")` (CACHED e609c1d4, sha verified, boot 10.699s) then clean re-run. Live stack untouched.
+- Gates: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation; jar baseline `e609c1d4`; config level 3 + globals; pristine 16/16 sha OK; EXPECTED-3 6144; plugin `21997aad`; `smp1_players=0`; NMT on.
+- Boot: restore → start → `Done` → `boot_s=10.154`; 0 fallback → `level_confirmed=3` (baseline 3-source rule).
+- Load: forceload 4096/1024/1024 exact; 6144 EDITs → `load_s=361.5` (batch-1 2989 head-start from r3 log tail, +300/batch to 6144 at batch 12 proves fresh; C6 future-skipped=0).
+- Kill: `t0`=last EDIT ack 12:14:57Z → wait 2s → SIGKILL at T+30 → `shutdown_s=1.0`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 1 `.linear.tmp` post-kill (nether `r.1.0` — outside the edited r.0.0 set) — expected kill-mid-flush signature per spec 38 §5, cleaned at close-out.
+- Safety (REAL decode-back verify): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3 + EDITLOG: **0 ok / 6144 missing / 0 stale / 0 unknown → `chunks_lost=6144`** — pure S2 tail-loss (all missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- EDITLOG staleness audit: 6144 keys span 2164s (min 11:38:53Z = r3 load tail, max 12:14:57Z = k1 t0); **6124 fresh** + **20 stale** (same r3-tail lag mechanism as L1 k1). As-measured `loss_window_s=2194.0` (20 stale keys) / `newest_lost_age_s=30.0` (=T+30 fresh tail ✓). Fresh-only window ≈392s (≈ load 361.5 + T) over 6124 fresh keys, ALL lost. Baseline S1+S2 CONFIRMED on L3: SIGKILL loses everything including edits acked 30s before kill.
+- CSV: row 15 `test=3 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=55`. Sidecars: mirror `samples/3-baseline-kill-SIGKILL30/` 9 files BEFORE wipe. Per-run wipe logs/cache only; `df` 12→12, floor holds.
+- STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=3) — CONTINUE to k3 (rc SIGKILL, swap baseline→rc2 first).
