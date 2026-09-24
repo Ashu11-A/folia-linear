@@ -2,8 +2,7 @@
 
 Patch supplement that adds the [Linear region format](https://github.com/xymb-endcrystalme/LinearRegionFileFormatTools)
 to Folia 26.1.2. Worlds keep using Anvil (`.mca`) until you opt one in; when you
-do, its region, POI and entity files are written as `.linear` instead, which on
-real world data is roughly half the disk.
+do, its region, POI and entity files are written as `.linear` instead.
 
 ![build](https://github.com/Ashu11-A/folia-linear/actions/workflows/build.yml/badge.svg)
 
@@ -20,165 +19,102 @@ real world data is roughly half the disk.
 
 ## Measured results
 
-- Live SMP, ~3.05M chunks, converted at compression level 1:
-  **24.99 GiB to 16.57 GiB, 33.7% saved** vs Anvil.
-- Same tree rewritten at level 22: **16.57 GiB to 11.04 GiB (33.4% saved
-  level 1 to 22)**, which is **55.8% against the original Anvil size**.
-- SYNTHETIC fixture tree, 129 MB of SMP-like data: **128,961,741 B to
-  52,163,783 B, 59.6% saved**, 0 chunk diffs over ~39k audited chunks.
-- Boot and save walls are unchanged against Anvil on the same fixtures. Tick p99
-  with players on has not been measured yet; see
-  [docs/limitations.md](docs/limitations.md).
-- 9058 tests green on the patched fork, 64 of them Linear-specific.
-
-Per-dimension tables and the method behind each number are in
+Stress sweep, full SMP world (~3.05M chunks, 24.99 GiB as Anvil), every level
+measured with 3 runs on the pre-fix jar (baseline) and 3 on the fixed jar (rc),
+plus SIGKILL durability rows. Raw rows:
+`versions/26.1.x/bench/stress-1-22.csv`. Method:
 [docs/benchmarks.md](docs/benchmarks.md).
+
+| Level | Size | Saved vs #1 | Shutdown base / rc | Verdict |
+|---|---|---|---|---|
+| 1 | 16.58 GiB | — (anchor) | 80.0s / 70.4s | ⚠️ works, little margin |
+| 3 | 16.04 GiB | 3.30% | 80.3s / 72.5s | ⚠️ works, little margin |
+| 6 | 13.87 GiB | 16.37% | 74.4s / 72.3s | ⚠️ works, little margin |
+| 9 | 13.45 GiB | 18.86% | 77.2s / 72.4s | ⚠️ works, little margin |
+| 12 | 13.21 GiB | 20.33% | 84.3s / **120.9s → SIGKILL, 2047 chunks lost** | base ⚠️ / **rc ❌** |
+| 15 | 12.86 GiB | ~22.4% | **121s → SIGKILL** / not run | **base ❌** |
+
+Shutdown is SIGTERM-to-exit against a 120 s grace period. ⚠️ here means the
+container peak touched ≥85% of its 6 GiB limit; every graceful shutdown saved
+every chunk at levels 1–9 on both jars.
+
+> **Do not use level 12 or above.** At 12 the fixed jar crossed the 120 s grace
+> period and was SIGKilled mid-flush, losing 2047 chunks (reproduced 2/2). At 15
+> even the pre-fix jar was killed the same way. The durability cliff for the
+> fixed jar lies between 9 and 12; for the pre-fix jar, between 12 and 15.
+
+> **Recommended: compression level 6.** Best shutdown numbers of the sweep on
+> both jars, 16.37% smaller than level 1 (44.5% smaller than Anvil), and nowhere
+> near any cliff.
+
+Durability under SIGKILL (T+30 s, full world, chunks edited then killed): the
+pre-fix jar loses ~100% of edited chunks at every level; the fixed jar
+(age-based flush + opportunistic flush) loses ~55% with a ~2-minute cutoff.
+Ungraceful kills still lose data — Linear is crash-safe, not crash-proof. OOM
+kills could not be induced on the test workload, so that row is unmeasured.
+
+Older offline numbers, kept for reference: level 1 converts 24.99 GiB Anvil to
+16.57 GiB (33.7% saved); level 22 reaches 11.04 GiB (55.8% vs Anvil). Offline
+conversion at 22 runs ~20 files/minute/worker, ~10× slower than level 1.
+
+Suite: 9066 tests green (22 skipped), 70 of them Linear-specific.
 
 ## Requirements
 
 - Java 25 for both build and runtime.
-- Folia `ver/26.1.x`, pinned at `62dc0f257a4f5de1ef2eae8cf1627156a769c67f`
+- Folia `ver/26.1.x`, pinned in `versions/26.1.x/upstream.properties`
   (Minecraft 26.1.2). CI warns and continues if upstream has moved.
 - ~25 GB free disk to build. The build itself is around 10 minutes on CI.
 
 ## Build
 
 ```bash
-# 1. Pinned base
-git clone --branch ver/26.1.x --single-branch https://github.com/PaperMC/Folia.git folia
-
-# 2. Stage this supplement into it (version-scoped supplement for 26.1.x;
-#    pin: versions/26.1.x/upstream.properties)
-cp folia-linear/versions/26.1.x/patches/minecraft-*.patch folia/folia-server/minecraft-patches/features/
-cp folia-linear/versions/26.1.x/patches/paper-*.patch     folia/folia-server/paper-patches/features/
-mkdir -p folia/folia-server/src/test/java/net/linear
-cp folia-linear/versions/26.1.x/tests/*.java folia/folia-server/src/test/java/net/linear/
-python3 folia-linear/versions/26.1.x/build-hunk.py folia/folia-server/build.gradle.kts.patch
-
-# 3. Build
-cd folia
-./gradlew applyAllPatches build folia-server:createPaperclipJar
-# -> folia-server/build/libs/folia-paperclip-26.1.2-*.jar
+# One version:
+scripts/build.sh --mc 26.1.x
+# All versions:
+scripts/build.sh
+# -> versions/26.1.x/build/folia-paperclip-26.1.2-*.jar
 ```
 
-`versions/26.1.x/build-hunk.py` splices the test source directory and the zstd-jni
-dependency into Folia's own `build.gradle.kts.patch`. That file uses the
-paperweight hunk convention, which plain `git apply` cannot parse, hence the
-script. It aborts instead of guessing if the base file has drifted.
+The script clones the pinned Folia ref, stages `versions/<mc>/patches`,
+`tests/` and `build-hunk.py`, and runs `applyAllPatches` plus the full build.
+`build-hunk.py` splices the test source directory and the zstd-jni dependency
+into Folia's own `build.gradle.kts.patch` (paperweight hunk convention); it
+aborts instead of guessing if the base file has drifted.
 
-Tagged pushes (`v*`) build on CI and attach the release asset plus its sha256.
-Assets are named `folia-<mcversion>-<build>.jar`, where the build number
-increments for each release of the same Minecraft version, so the tag
-`v26.1.2-linear.3` produces `folia-26.1.2-3.jar`.
+Tagged pushes (`v1.x.y`) build on CI and attach one jar plus its sha256 per
+supported version, named `folia-linear-<mc>-<project>.jar`. A manual
+`workflow_dispatch` input can limit a release to some versions.
 
 ## Configuration
 
-Two settings matter in practice: which format a world writes, and how hard zstd
-compresses on flush. Both live under `region-format` in the Paper config files.
+Two settings matter: which format a world writes, and how hard zstd compresses
+on flush. Both live under `region-format` in the Paper config files.
 
-### Choosing the format
+`region-format.format` accepts `ANVIL` or `LINEAR` and controls **new writes
+only** (reads try both extensions either way). Per world in
+`config/worlds/<world>/paper-world.yml`; server-wide default in
+`paper-world-defaults.yml`, shipped as `ANVIL`. Flipping back to `ANVIL` is
+safe at any time. Unknown values fall back to `ANVIL` with a
+`[region-format] Unknown region format` log line.
 
-`region-format.format` accepts `ANVIL` or `LINEAR`. It controls **new writes
-only**; reads try both extensions either way.
+`region-format.linear.compression-level` is the zstd level on flush, 1–22.
+**Default 1; recommended 6; 12 and above are not safe** (see above). Out-of-range
+values fall back to 1 with a log line. Changing it is a config flip, not a
+migration: the header level byte is informational, decoding is
+level-independent, and files are rewritten at the new level as they are saved.
 
-- Per world, in `config/worlds/<world>/paper-world.yml`:
-
-  ```yaml
-  region-format:
-    format: LINEAR
-  ```
-
-- Server-wide default, in `paper-world-defaults.yml`:
-
-  ```yaml
-  region-format:
-    format: ANVIL
-  ```
-
-- The shipped default is `ANVIL` everywhere. Nothing changes until you set a
-  world to `LINEAR` and restart.
-- A mix of `ANVIL` and `LINEAR` worlds in one process is a supported end state,
-  not a degraded one. The switch is per storage folder, so `region/`, `poi/` and
-  `entities/` of the same world all follow that world's setting.
-- Unrecognised values (including lowercase `linear`) log
-  `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.`
-  and the world runs on Anvil. Check for that line after any config edit.
-- Flipping a world back to `ANVIL` is safe at any time. Existing `.linear` files
-  stay readable through dual-read; only new writes go back to `.mca`.
-
-### Compression level
-
-`region-format.linear.compression-level` is the zstd level used when a region is
-flushed to disk. Range 1 to 22, default 1.
-
-```yaml
-region-format:
-  format: LINEAR
-  linear:
-    compression-level: 1
-```
-
-- It is a per-world key, so it goes in the same file as `format`
-  (`paper-world.yml`, or `paper-world-defaults.yml` for the default).
-- It only affects the zstd flush. Chunks staged in memory are always LZ4 at a
-  fixed setting, so the level never touches the tick-adjacent write path.
-- Out-of-range values log
-  `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 1.`
-  and run at 1. The value is clamped again in `AbstractRegionFileFactory` and
-  once more in the `LinearRegionFile` constructor, so a bad value cannot reach
-  the codec.
-- Changing the level is a config flip, not a migration. The level byte in the
-  file header is informational and decoding does not depend on it, so old files
-  stay readable and get rewritten at the new level as they are saved.
-
-What the level buys, measured offline on the live SMP tree (region files only):
-
-| Dimension | Level 1 | Level 22 | Saved |
-|---|---|---|---|
-| Overworld | 17,339,006,898 B | 11,561,937,798 B | 33.3% |
-| Nether | 165,375,247 B | 111,835,003 B | 32.4% |
-| End | 291,280,114 B | 157,860,846 B | 45.8% |
-| Total | 16.57 GiB | 11.04 GiB | 33.4% |
-
-Before raising it:
-
-- Offline conversion at 22 ran about 20 files per minute per worker, roughly ten
-  times slower than at 1. Each overworld half took ~40 minutes across 8-10
-  workers.
-- The cost of level 22 on the *live* flush path has not been measured over a
-  long soak. Two clean boots and a `save-all` at 22 were fine, but that is not a
-  soak.
-- Run a new world at level 1 through at least one full save cycle and one
-  restart first. Raise it after that, not before.
-
-### Remaining keys
-
-| Key | File | Default | Effect |
-|---|---|---|---|
-| `region-format.format` | `paper-world.yml`, `paper-world-defaults.yml` | `ANVIL` | Format for new writes. Unknown value falls back to `ANVIL`. |
-| `region-format.linear.compression-level` | same | `1` | zstd level on flush, 1-22. Out of range falls back to `1`. |
-| `region-format.linear.crash-on-broken-symlink` | same | `true` | Halts the server when a `.linear` path is a broken symlink. |
-| `region-format.linear.flush-frequency` | `paper-global.yml` | `10` | Declared, validated, **read by nothing in this release**. |
-| `region-format.linear.flush-max-threads` | `paper-global.yml` | `1` | Declared, validated, **read by nothing in this release** (`<=1` serial). |
-| `region-format.linear.compression-workers` | `paper-global.yml` | `0` | Declared, validated, **read by nothing in this release** (`0` inert). |
-| `region-format.linear.long-distance-matching` | `paper-global.yml` | `0` | Declared, validated, **read by nothing in this release** (`0` off). |
-| `region-format.linear.log-flush-batches` | `paper-global.yml` | `false` | Declared, **read by nothing in this release** (warn-only). |
-
-- `crash-on-broken-symlink` halts on purpose: a broken symlink usually means a
-  mounted volume disappeared, and continuing would silently regenerate chunks.
-  Resolve symlinks before opting a world in. Setting it to `false` turns the halt
-  into a warning, which is a forensics mode, not a normal setting.
-- The five global Linear knobs exist because the config surface mirrors Kaiiju's
-  plus the planned Loop-4 scheduler inputs. There is
-  no flush scheduler or thread pool wired to them yet, so tuning them does
-  nothing at defaults. They are still validated: `flush-frequency < 1` logs
-  `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.`
-- Ready-to-paste snippets for all three files are in `release/`:
-  `paper-world-defaults.region-format.yml`, `paper-world.region-format.yml`,
-  `paper-global.region-format.yml`.
+Global knobs in `paper-global.yml` (`flush-frequency` default 10,
+`flush-max-threads` default 1, `compression-workers` and
+`long-distance-matching` default 0, `log-flush-batches` default false) control
+the shared flush pool, the age-based flusher and the zstd workers. `<= 1`
+thread keeps the pre-pool serial loop; workers and LDM default to inert.
+`crash-on-broken-symlink` (default `true`) halts the server on a broken
+`.linear` symlink instead of silently regenerating chunks.
 
 Full reference, including validation order and every log line:
-[docs/configuration.md](docs/configuration.md).
+[docs/configuration.md](docs/configuration.md). Ready-to-paste snippets for all
+three files are in `release/`.
 
 ## Opting a world in
 
@@ -192,10 +128,10 @@ Short version. The full procedure, with the checks that matter, is in
    `find <world>/region <world>/poi <world>/entities -xtype l` must come back
    empty.
 3. Record a baseline with `du -sb region poi entities` and the `.mca` count.
-4. Set `region-format.format: LINEAR` in that one world's `paper-world.yml`.
-   Pick a low-traffic world first, never spawn, never all worlds at once.
+4. Set `region-format.format: LINEAR` (and `compression-level: 6`) in that one
+   world's `paper-world.yml`. Pick a low-traffic world first, never spawn,
+   never all worlds at once.
 5. Restart, then soak through at least one full save cycle and one more restart.
-   Linear buffers flush on save, and the second restart proves the files reopen.
 
 Signs it is working: new `r.X.Z.linear` files appearing after a save cycle, and
 `head -c 8 <file>.linear | od -A x -t x1z` starting with
@@ -216,16 +152,15 @@ all support `--dry-run`.
 
 ## Monitoring
 
-- `/linearstats` prints per-folder read, write, flush and load counts with
-  average microseconds, plus a `TOTALS` row. Permission is
+- `/linearstats` prints a per-world panel (region/poi/entities): level, time
+  since last flush, read/write/flush counts with averages, a dirty-depth bar,
+  packed-vs-raw bytes and flush p50/p99, plus a `TOTALS` footer. Permission is
   `linear.command.linearstats`, OP by default.
 - `linearstats: no Linear folders tracked (no linear I/O yet).` on an
   Anvil-only node is expected, not an error.
 - `LinearRegionFlushCompletedEvent` fires once per flush that touched at least
   one file. It is async by contract; listeners must not touch world state
   directly.
-- Counters and the event are read-only instrumentation. They add no config keys
-  and change no behaviour.
 
 Details in [docs/observability.md](docs/observability.md).
 
@@ -242,27 +177,24 @@ Details in [docs/observability.md](docs/observability.md).
 ## Repository layout
 
 - `versions/26.1.x/` - the version-scoped supplement for Folia `ver/26.1.x`
-  (pin: `upstream.properties`).
+  (pin: `upstream.properties`). A new Minecraft line starts as a copy of the
+  previous folder (`scripts/new-version.sh`); porting checklist in
+  [CONTRIBUTING.md](CONTRIBUTING.md).
 - `versions/26.1.x/patches/` - the fork itself, as paperweight feature patches.
-  - `minecraft-0009` Linear core, dual-read dispatch, broken-symlink guard.
-  - `minecraft-0010` crash-flag wiring and guard call sites.
-  - `minecraft-0011` recreate-format support, flush policy, factory mapping,
-    oversized guard.
-  - `minecraft-0012` timing counters on the Linear read, write, flush and load
-    paths.
-  - `paper-0008` config keys and dual-read tests.
-  - `paper-0009` flush-frequency constraint removal and upgrade path.
-  - `paper-0010` `/linearstats` command, flush event, folder-name helper.
-  - `paper-0011` Paper API delegate so plugins can read stats without NMS
-    imports.
-- `versions/26.1.x/tests/` - test sources copied into the fork's test tree: Linear round-trip,
-  timing instrumentation, `/linearstats` behaviour, and the suite class that
-  makes the fork's Gradle task actually run them.
-- `scripts/` - `preflight.sh` (local mirror of CI).
+  Core (`minecraft-0009` region format, `0010` crash flags, `0011` recreate
+  support, `0012` timing, `0013` unlocked flush, `0014` eviction close,
+  `0015` measurement, `0016` shared flush pool, `0017`/`0020` age flush,
+  `0018` zstd workers/LDM, `0019` flush bridge) and config/command surface
+  (`paper-0008` keys, `0009` constraints, `0010` stats command, `0011` API
+  delegate, `0012` knob declarations, `0013` stats panel).
+- `versions/26.1.x/tests/` - test sources copied into the fork's test tree.
+- `versions/26.1.x/bench/` - the stress harness, the per-run CSV and the
+  per-level result docs from the compression sweep.
+- `scripts/` - `build.sh`, `new-version.sh`, `preflight.sh` (local mirror of CI).
 - `release/` - `rollback.sh`, operator notes, release runbook, config templates.
 - `docs/` - architecture, configuration, benchmarks, observability, limitations.
-- `.github/workflows/build.yml` - preflight gate, then full build, tests, boot
-  smokes and release asset.
+- `.github/workflows/build.yml` - version-matrix build, tests, boot smokes,
+  per-version release assets.
 
 ## Contributing
 
@@ -274,8 +206,8 @@ scripts/preflight.sh --compile  # + fork compileJava
 scripts/preflight.sh --tests    # + Linear suites
 ```
 
-Push only on green. Patch conventions and the rest of the workflow are in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Push only on green. Patch conventions, the multi-version porting checklist and
+the rest of the workflow are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License and credits
 
