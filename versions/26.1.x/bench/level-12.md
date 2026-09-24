@@ -120,3 +120,27 @@ baseline run 2 done: boot=10.708 load=352.1 save=-1 shut=84.3 exit=143 lost=0/61
 ## Run b3 (warm)
 
 baseline run 3 done: boot=10.304 load=354.2 save=-1 shut=85.2 exit=143 lost=0/6144 dirty=56 tick=-1 cgroup_peak=6144.0
+
+## CLOSE-OUT (2026-09-24 ~04:00–04:30Z) — owner-accepted ❌ FINAL, no re-run
+
+- Acceptance: owner accepted `test #12 rc = ❌ FINAL` (r1 stands, no re-run). r1: shutdown **120.9s** → SIGKILL 137 (grace-expiry, `oom_killed=0`) → **2047/6144 chunks lost** (all missing, S2 tail-loss), 2/2 reproducible with park-stop confirm (**121.0s/137/oom 0** on the post-kill tree). Baseline = WARN FINAL (shutdown median **84.3s**, 0 lost 3/3).
+- Grading note: **the level is graded complete by verdict, not by row count.** Axis stands at 4 rows (b1+b2+b3+r1, CSV `test=12` n=4); r2/r3/k1/k3 will NOT run — deliberate, not missing data.
+- Why no r2/r3/kills: charter STOP+REPORT fired on the first SIGTERM ❌ (exit 137 on a graceful run + chunks_lost on run<90). Options offered were (a) accept L12=❌ and close out, (b) re-run r1 to test fluke; owner chose (a). Kills are moot post-❌ (the durability pair needs a passing axis to prove against).
+- Tree: L12 `dimensions/minecraft/{overworld/{region,entities,poi},the_nether/{region,entities},the_end/{region,entities,poi}}` (~14.2G: OW region 13831575993 + nether region 134021727 + end region 193745043 + entities/poi) removed from `smp-test` volume (incl. the 1 `.linear.tmp` orphan — kill-mid-flush signature, gone with the tree); small world restored from `level-12/smp-test-small-backup` → `smp-test/` back to **1072519 B** (+39B vs pre-test 1072480 — session/metadata drift, NOT region data: 18 small `.linear` files, faithful shape, no poi dirs, 0 `.tmp` orphans; per-dim `data/` + `paper-world.yml` were never moved, left in place; world-root `level.dat`/players/session.lock likewise never staged, left in place).
+- Configs restored: wholesale copy of the 3 backup files → `compression-level: 12→6` (pre-test 6), `log-flush-batches: true→false`, NMT line removed from `sexidium-node.args` (diff-verified: all 3 files IDENTICAL to backup post-cp).
+- Jars: shadow-server `folia.jar` (node `folia.jar` symlink → shadow, untouched) back to baseline `e609c1d439e7bdd68e68abccbcf02c818efe77fa4ae8d7ddc2914204ca0ee06b` (sha verified post-cp; pre-test state; next agent swaps per run).
+- Wipe: `stress/level-12/` removed entirely (tree manifests, pristine, EXPECTED host copies, small-backup — mirror holds EXPECTED/commands/sidecars) + `level-12-convert.log`; `smp-test` logs/cache/crash-reports wiped.
+- Disk: free **14G → 27G** (28±1G band ✓); floor 8G held throughout (minimum observed 14G). Container left STOPPED (`sexidium-smp-test` Exited 137, park-stop state, never restarted by this agent). Live stack untouched (all live nodes STOPPED by owner; only `stress/*` + `smp-test` volume ever written).
+- `run-queue.json`: `done` stays `["1","3","6","9"]`; `accepted_partial:["12"]` added host + mirror (this close-out).
+
+## FINAL verdict (owner-accepted, no re-run)
+
+- **`❌ FAIL FINAL — test #12 rc: shutdown 120.9s (120s grace-expiry SIGKILL, oom 0), chunks_lost=2047/6144 (S2 tail-loss, all missing), 2/2 reproducible (r1 + 121.0s/137 park-stop confirm).`** Baseline WARN FINAL (n=3, shutdown median 84.3s, 0 lost 3/3). The level is graded complete by verdict, not by row count — r2/r3/kills will NOT run.
+- Handoff #15: BLOCK lifted — L15 MUST start from a FRESH convert from source-anvil (L12 tree wiped; `smp-test` holds only the small world; pristine-restore discipline applies as usual). Medians anchor `bytes_on_disk=14182988894, vs_anvil 0.5443`; baseline SIGTERM median shutdown 84.3s; kill rows n/a (SIGKILL-only pair never attempted post-STOP); C1–C7 calibrations in level-01.md (reused, NOT re-derived).
+
+## Loop-5 inputs (from L12 r1)
+
+- Save-all FIRST completion in campaign (**121.3s**) + stats-reset anomaly (`flush_before=9 → flush_after=0`; post-save panel 03:15:11 server-rendered ALL folders `files=0`, `dirty 0/512`, `never flushed`, p50/p99 0us; presave 03:11:44 real data + prestop post-redirty normal dirty 55). No second `Done`, no `Stopping`, no OOM in the 3000-line tail window — stats zeroed WITHOUT restart. OPEN QUESTION: what resets Linear stats during a level-12 save-all drain. Completion timed-line real (stale-guard matched); the 9→0 movement is NOT a save-all effect in the §7 sense.
+- RC flush `p50/p99 = 0.0/0.0` ANOMALOUS ZEROS (parser faithfully read server-rendered zeros; NOT -1-absent, NOT 1000/1000 — flagged, not silently bucketed). Prestop panel normal (1000/1000, dirty 55).
+- 1× `.linear.tmp` orphan post-kill (`the_nether/entities/r.0.0` — kill-mid-flush signature per spec 38 §5, recorded not a failure; removed at close-out with the tree).
+- Re-confirms (already logged L1/L6/L9): `swap_jar` cp-after-start ordering bug (r1 swap-boot Done belongs to pre-swap baseline boot; true rc boot is AXIS `boot_s=10.103`); C6b midnight-date-line parse fix holds (C6 future-skipped=0 on all 4 rows).
