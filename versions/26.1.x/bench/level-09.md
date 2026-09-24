@@ -13,7 +13,7 @@
 - Staging (move, not copy — same `/dev/sda6`, rename instant): backed up small world + configs to `level-9/smp-test-small-backup`; moved 8 dirs `level-9/tree/{dims}/{region,entities,poi}` → `smp-test/.../dimensions/minecraft/...` (world region counts OW 2502 / nether 64 / end 676); `TREE` left with manifests only; set `compression-level: 6→9`, `log-flush-batches: false→true`; appended NMT to `sexidium-node.args`. Explicit per-dim `mv` commands (single-quoted SSH, no loop vars — L6 staging lesson honored)
 - Smoke boot baseline 20:59Z `Done (10.189s)`, 0 fallback lines, config-readback level 9 → `level_confirmed=9`; console loopback `linearstats` → baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); smc.py `bff98d8c` + smc_batch.py `a2b7376b` (persisted L6 layer, shas re-verified); clean SIGTERM stop (143) afterwards, container STOPPED for b1
 
-## Runs (IN PROGRESS — 1/8: baseline b1 done)
+## Runs (IN PROGRESS — 7/8: axis 6/6 + k1 baseline SIGKILL; k3 rc SIGKILL pending)
 
 | run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -63,9 +63,21 @@
 - Disk: `free_before_gib=14` → `free_after_wipe_gib=14` (per-run wipe: logs/cache/crash-reports only, tree stays; floor holds).
 - Sidecars: mirror `samples/9-rc-2/` (EDITLOGs, EXPECTED×2, panels, stats, mem-series 935, tick-series, verify, tail-stop, runner log `l9-rc2.runner.log`; no autosave-watch — run 2) — driver writes mirror-direct.
 
+## Run k1 (baseline SIGKILL T+30) — evidence 2026-09-24 00:17Z→00:30Z (driver `loop4-P0-mirror/l9wrap.py k_bskill` REDO; MANUAL jar swap rc2→baseline BEFORE the run per L3 lesson — shadow `e609c1d4` verified on disk + fresh baseline boot 9.985s + `confirm_level` TRUE; loopback console)
+
+- FAILED first attempt (no row, no data impact — driver date-line bug, Loop-5 input): k1 launched 23:59Z, workload crossed midnight UTC; `parse_feedbacks` samples `base=today_utc()` per call, so pre-midnight 23:xx feedback lines scanned post-midnight mapped +24h into the future and were C6-skipped — workload stalled at 5844/6144 (300 keys, exactly the pre-midnight tail) past the 600s deadline → `RuntimeError: STOP: workload incomplete`. All 21 BATCH_DONE + Changed lines existed in the log (server healthy — pure parse artifact). Failed runner log preserved at `l9-k1-failed-midnight.runner.log`; unmeasured stop (137, nothing at stake) + pristine restore; driver fixed (C6b rollover tolerance: future-ts in (now+300, now+86400+300] gets −86400d before the skew-skip) and k1 redone clean. Side effect of C6b: the redo's cumulative scans now count the failed attempt's 23:5x–00:1x acks as stale keys (EDITLOG span below) — same tail-lag mechanism as L1/L3/L6 k1, larger window.
+- Gates: free **14 GiB ≥ 8 floor** (abort <8 never triggered, 14→14); lock = standing `sleep 200000` reservation (precedent); jar baseline `e609c1d4` (shadow + node symlink, swapped from rc2 before run); config `compression-level: 9` + globals; pristine 16/16 sha OK (double restore: pre-run unmeasured-stop restore + `run_kill` restore); EXPECTED-9 6144 keys + `commands-y319.txt`; plugin `21997aad`; `smp1_players=-1` (live STOPPED by owner); NMT **ON**.
+- Boot: restore → start → `Done` → `boot_s=10.234`; baseline plain panel + 0 fallback → `level_confirmed=9` (asserted inside `run_kill`).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact**; staged 6144 EDITs in 21×300 batches → `load_s=354.5` (batch-1 acks 6144/6144 — full failed-attempt-tail coverage via C6b; exact delivery proven by 21/21 BATCH_DONE; C6 future-skipped=0 post-fix).
+- Kill: `t0`=last EDIT ack 00:24:12Z → post-load mem-prekill + prestop linearstats consumed the window (`waiting 0s to T+30` — T+30 had already elapsed) → `docker kill -s SIGKILL sexidium-smp-test` at **t0+48.1s** (NOT t0+30 — timing deviation, honest, same as L6 k1) → `shutdown_s=0.9` (instant), `ExitCode=137` clean-kill, `OOMKilled=false` (captured BEFORE restart). Tail: no clean markers (expected for SIGKILL), 0 `Failed to flush`, no fallback SEVERE, no `.linear.tmp` orphans in tail-kill.
+- Safety (REAL decode-back verify, step 7): post-kill fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-9 + EDITLOG: **0 ok / 6144 missing / 0 stale / 0 unknown → `chunks_lost=6144`** — pure S2 tail-loss signature (all missing, zero stale = no cross-run contamination in blocks). `flush_failures=0`; `level_fallback_severe=0`.
+- EDITLOG staleness audit (honest, sidecars immutable): 6144 keys span 1177s (min ack 00:04:35Z = failed-attempt tail resurrected by C6b, max 00:24:12Z = k1 t0). As-measured `loss_window_s=1225.1` (stale keys) / `newest_lost_age_s=48.1` (= t0+48.1 actual kill time). Fresh-only window ≈403s (≈ load 354.5 + 48.1) over fresh keys, ALL lost. Baseline S1+S2 CONFIRMED on L9: SIGKILL loses everything including edits acked 48s before kill.
+- CSV: row 7 `test=9 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=54`. Sidecars: mirror `samples/9-baseline-kill-SIGKILL30/` 10 files (EDITLOG, EXPECTED×2, boot panel, mem-prekill, tail-kill, verify, wool-ids, runner log `l9-k1.runner.log`) — driver writes mirror-direct. Per-run wipe logs/cache only (tree stays); `df` 14→14, floor holds.
+- STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=9) — CONTINUE to k3 (rc SIGKILL, manual swap baseline→rc2 + STOP/START + confirm first — working around the `swap_jar` ordering bug).
+
 ## Provisional verdict (rules: scripts/render-stress-table.py header)
 
-`WARN (baseline FINAL n=3 unchanged + rc n=2 provisional)` — baseline medians stay `lvl 9, n=3, WARN, shutdown 77.2s, why=peak>=85%`. rc provisional n=2 (NOT a level verdict): shutdown median 73.4s (72.4, 74.4) <96, dirty 37→35 (−31%→−35% vs baseline 54), load median 352.1s (351.9, 352.2), boot median 10.3s (10.178, 10.398), lost 0+0, exits 143+143, 0 failures — m0017 age-flush direction holds across both rc runs; need r3 + 2 kills. No ❌ (single ❌ would mark the level — none seen). STOP+REPORT triggers: none (floor 14≥8 holds, level_confirmed=9, no ❌) — CONTINUE to r3.
+`WARN (axis COMPLETE + k1 baseline SIGKILL data)` — axis medians unchanged (baseline `shutdown 77.2s`, rc `shutdown 72.4s`, both `why=peak>=85%`). k1 (run=91, NOT a level grade per spec 38 §3.3): exit 137, lost 6144/6144 all-missing (S1+S2 on L9), newest 48.1s (T+30 window missed by post-load steps — honest deviation). Failed first attempt documented above (driver date-line bug C6b, fixed, Loop-5 input). No ❌ on any SIGTERM row; no floor breach; `level_confirmed=9` every row. STOP+REPORT triggers: none — CONTINUE to k3.
 
 ## Run r1 (rc, autosave-watch) — rc run 1 done 2026-09-23 22:28Z→22:55Z (driver `loop4-P0-mirror/l9wrap.py rc1`, FIRST rc run — jar swap baseline→rc2 included; loopback console)
 
@@ -167,3 +179,7 @@ rc run 2 done: boot=10.398 load=352.2 save=-1 shut=74.4 exit=143 lost=0/6144 dir
 ## Run r3 (rc)
 
 rc run 3 done: boot=10.823 load=351.6 save=-1 shut=69.4 exit=143 lost=0/6144 dirty=39 tick=-1 cgroup_peak=6144.0
+
+## Run k1 baseline SIGKILL T+30
+
+kill baseline SIGKILL30: lost=6144 window=1225.0646963119507: boot=10.234 load=354.5 save=-1 shut=0.9 exit=137 lost=6144/6144 dirty=54 tick=-1 cgroup_peak=5813.2
