@@ -13,7 +13,7 @@
 - Staging (move, not copy — same `/dev/sda6`, rename instant): backed up small world + configs to `level-9/smp-test-small-backup`; moved 8 dirs `level-9/tree/{dims}/{region,entities,poi}` → `smp-test/.../dimensions/minecraft/...` (world region counts OW 2502 / nether 64 / end 676); `TREE` left with manifests only; set `compression-level: 6→9`, `log-flush-batches: false→true`; appended NMT to `sexidium-node.args`. Explicit per-dim `mv` commands (single-quoted SSH, no loop vars — L6 staging lesson honored)
 - Smoke boot baseline 20:59Z `Done (10.189s)`, 0 fallback lines, config-readback level 9 → `level_confirmed=9`; console loopback `linearstats` → baseline panel (9 folders, plain `dirtyDepth`, C4 as expected); smc.py `bff98d8c` + smc_batch.py `a2b7376b` (persisted L6 layer, shas re-verified); clean SIGTERM stop (143) afterwards, container STOPPED for b1
 
-## Runs (IN PROGRESS — 7/8: axis 6/6 + k1 baseline SIGKILL; k3 rc SIGKILL pending)
+## Runs (IN PROGRESS — 8/8: axis 6/6 + SIGKILL kill pair 2/2, OOM skipped per C7)
 
 | run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -74,6 +74,17 @@
 - EDITLOG staleness audit (honest, sidecars immutable): 6144 keys span 1177s (min ack 00:04:35Z = failed-attempt tail resurrected by C6b, max 00:24:12Z = k1 t0). As-measured `loss_window_s=1225.1` (stale keys) / `newest_lost_age_s=48.1` (= t0+48.1 actual kill time). Fresh-only window ≈403s (≈ load 354.5 + 48.1) over fresh keys, ALL lost. Baseline S1+S2 CONFIRMED on L9: SIGKILL loses everything including edits acked 48s before kill.
 - CSV: row 7 `test=9 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=54`. Sidecars: mirror `samples/9-baseline-kill-SIGKILL30/` 10 files (EDITLOG, EXPECTED×2, boot panel, mem-prekill, tail-kill, verify, wool-ids, runner log `l9-k1.runner.log`) — driver writes mirror-direct. Per-run wipe logs/cache only (tree stays); `df` 14→14, floor holds.
 - STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=9) — CONTINUE to k3 (rc SIGKILL, manual swap baseline→rc2 + STOP/START + confirm first — working around the `swap_jar` ordering bug).
+
+## Run k3 (rc SIGKILL T+30) — evidence 2026-09-24 00:39Z→00:52Z (driver `loop4-P0-mirror/l9wrap.py k_rskill`; MANUAL jar swap baseline→rc2 + STOP/START + confirm BEFORE the run, working around the `swap_jar` ordering bug — shadow `b0ea2048` verified + fresh rc boot 9.987s + `confirm_level` TRUE all-dims-lvl-9; loopback console)
+
+- Gates: free **14 GiB ≥ 8 floor** (abort <8 never triggered, 14→14); lock = standing `sleep 200000` reservation (precedent); jar rc2 `b0ea2048` (shadow + node symlink, 60541066 B); config `compression-level: 9` + globals; NMT **ON**; pristine 16/16 sha OK (double restore); EXPECTED-9 6144 keys + `commands-y319.txt`; plugin `21997aad`; `smp1_players=-1` (live STOPPED by owner).
+- Boot: restore → start → `Done` → `boot_s=9.715`; rc panel `lvl 9` all dims + 0 fallback → `level_confirmed=9` (asserted inside `run_kill`).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact**; staged 6144 EDITs in 21×300 batches → `load_s=354.1` (batch-1 acks 6144/6144 — full k1-tail coverage via C6b; exact delivery proven by 21/21 BATCH_DONE; C6 future-skipped=0).
+- Kill: `t0`=last EDIT ack 00:46:19Z → post-load steps again consumed the window (`waiting 0s to T+30`) → SIGKILL at **t0+47.4s** (same timing deviation as k1, honest) → `shutdown_s=0.9`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE, no `.linear.tmp` orphans.
+- Safety (REAL decode-back verify, step 7): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib verifier vs EXPECTED-9 + EDITLOG: **2855 ok / 3289 missing / 0 stale / 0 unknown → `chunks_lost=3289`** (pure missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- Age analysis (the m0017 datum): EDITLOG span 00:04:35 (k1-fail tail, 20 stale keys via C6b) →00:46:19 (k3 t0). Saved (2855): median ack 00:42:31, newest 00:44:25. Lost (3289): median 00:44:41, newest 00:46:19 (=t0+47.4 actual kill). Per-minute lost fraction: 00:40 25% / 00:41 27% / 00:42 33% / 00:43 33% / 00:44 71% / 00:45 100% / 00:46 100% — bulk cutoff ~2 min pre-kill (same as L1/L3/L6); max window 2551.4s from the 20 stale k1-fail-tail keys / fresh-only window ≈402s. As-measured `loss_window_s=2551.4` / `newest_lost_age_s=47.4`.
+- m0017 assessment: DIRECTION CONFIRMED on L9 — baseline k1 lost 6144/6144 (100%), rc k3 lost 3289/6144 (54%), saved 2855 (46%) via slow per-file age-flush. Cross-level: L1 rc saved 46% / L3 rc saved 43% / L6 rc saved 47% / L9 rc saved 46% — consistent ~2-min bulk cutoff everywhere. The `≤F+skew` bar needs F's true units (open Loop-5 question from L1, NOT a ❌ — kill rows are data; level already WARN).
+- CSV: row 8 `test=9 jar=rc run=91 ... exit=137 oom=0 chunks 3289/6144 dirty=55`. Sidecars: mirror `samples/9-rc-kill-SIGKILL30/` 10 files — driver writes mirror-direct. Per-run wipe logs/cache only; `df` 14→14, floor holds. STOP+REPORT check: none — CONTINUE to close-out (OOM rows skipped per C7, SIGKILL pair complete).
 
 ## Provisional verdict (rules: scripts/render-stress-table.py header)
 
@@ -183,3 +194,7 @@ rc run 3 done: boot=10.823 load=351.6 save=-1 shut=69.4 exit=143 lost=0/6144 dir
 ## Run k1 baseline SIGKILL T+30
 
 kill baseline SIGKILL30: lost=6144 window=1225.0646963119507: boot=10.234 load=354.5 save=-1 shut=0.9 exit=137 lost=6144/6144 dirty=54 tick=-1 cgroup_peak=5813.2
+
+## Run k3 rc SIGKILL T+30
+
+kill rc SIGKILL30: lost=3289 window=2551.4499917030334: boot=9.715 load=354.1 save=-1 shut=0.9 exit=137 lost=3289/6144 dirty=55 tick=-1 cgroup_peak=6099.2
