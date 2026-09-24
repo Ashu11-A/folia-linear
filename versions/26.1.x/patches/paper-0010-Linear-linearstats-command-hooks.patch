@@ -1,7 +1,10 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: SUM <sum@sexidium.local>
-Date: Sat, 20 Sep 2026 00:00:00 +0000
-Subject: [PATCH] Sexidium linearstats command hooks (L2-STATS)
+From: folia-linear <folia-linear@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear linearstats command hooks (L2-STATS)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 Loop-2 Stage 2 (SUM): Paper-side hooks for the Linear timing stats.
 (1) PaperCommands static-block registration anchoring on the tps line.
@@ -9,19 +12,19 @@ Loop-2 Stage 2 (SUM): Paper-side hooks for the Linear timing stats.
 (3) LinearRegionFlushCompletedEvent (ASYNC super(true), flush-granularity) +
 Paper-side bridge firing it OFF IO threads via the async scheduler, only when
 >=1 file attempted. Command output is pull-only via coordinator snapshots() /
-sexidium$stats(); no new storage fields, no NMS signature changes.
-(4) SexidiumLinearFolderNames (single shared helper for folderType/world,
+linear$stats(); no new storage fields, no NMS signature changes.
+(4) LinearFolderNames (single shared helper for folderType/world,
 de-duplicated from command + bridge; folderType pinned region|poi|entities).
 
 BASE-TREE ASSUMPTIONS (Folia base checkout absent locally at
-/tmp/sexidium-folia; all Paper hunks are written against stated assumed
+/tmp/folia-linear; all Paper hunks are written against stated assumed
 context and must be re-checked by the integrator — see return message):
 (A1) PaperCommands.java is the legacy Bukkit-style registry with a static
 COMMANDS map and a `COMMANDS.put("tps", ...)` line (if base is
 brigadier-only, adapt to BasicCommand registration instead).
 (A2) CommandServerHealth shape is `extends org.bukkit.command.Command` with
 ctor/execute/empty-tabComplete (mirrored here; relocate package to match
-its real location if different). Permission `sexidium.command.linearstats`
+its real location if different). Permission `linear.command.linearstats`
 defaults to OP, mirrored from tps in code; if base declares tps in
 permissions.yml/default-OP instead, integrator must mirror the
 permissions.yml entry there too (see Command javadoc + code comment).
@@ -34,7 +37,7 @@ contract + 5-line listener sample).
 (fallback: documented sync fire with a comment if absent; region scheduler
 is NOT used for delivery — async was chosen for Folia-safe off-IO fire).
 (A5) notifyFlush CALL-SITE ASSUMPTION (explicit, Paper-side save path, integrator to wire):
-this patch provides `SexidiumLinearFlushBridge#notifyFlush(Plugin,String,long,long)`
+this patch provides `LinearFlushBridge#notifyFlush(Plugin,String,long,long)`
 but NO call site; the integrator must wire it into the Paper-side save path
 (e.g., after `LinearFlushCoordinator.flushDirty()` in world save), passing
 the owning `Plugin` explicitly (the old `getProvidingPlugin(Bridge.class)`
@@ -42,22 +45,9 @@ misuse is fixed via param; do NOT use it — the bridge class lives in
 server code, not a plugin jar). If the assumed save path moved, adapt the
 wiring, not the bridge contract.
 
-diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java
-index 3deca0b..15a52cd 100644
---- a/src/main/java/io/papermc/paper/command/PaperCommands.java
-+++ b/src/main/java/io/papermc/paper/command/PaperCommands.java
-@@ -25,6 +25,7 @@ public final class PaperCommands {
-         COMMANDS.put("paper", new PaperCommand("paper"));
-         COMMANDS.put("mspt", new MSPTCommand("mspt"));
-         COMMANDS.put("tps", new io.papermc.paper.threadedregions.commands.CommandServerHealth()); // Folia - region threading
-+        COMMANDS.put("linearstats", new CommandLinearStats("linearstats")); // Sexidium linearstats (A1 assumed tps anchor; adapt if brigadier-only)
-         COMMANDS.put("profiler", new io.papermc.paper.threadedregions.commands.CommandProfiler()); // Folia - region threading - profiler
- 
-         COMMANDS.forEach((s, command) -> {
- 
 diff --git a/src/main/java/io/papermc/paper/command/CommandLinearStats.java b/src/main/java/io/papermc/paper/command/CommandLinearStats.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..2222222222222222222222222222222222222222 100644
+index 0000000000000000000000000000000000000000..285cbe209826a45f9f14e2b75e4e395f97ce0860
 --- /dev/null
 +++ b/src/main/java/io/papermc/paper/command/CommandLinearStats.java
 @@ -0,0 +1,94 @@
@@ -66,30 +56,30 @@ index 0000000000000000000000000000000000000000..22222222222222222222222222222222
 +import java.util.ArrayList;
 +import java.util.List;
 +import java.util.Map;
-+import io.papermc.paper.linear.SexidiumLinearFolderNames;
-+import net.sexidium.LinearFlushCoordinator;
-+import net.sexidium.LinearRegionTimings;
++import io.papermc.paper.linear.LinearFolderNames;
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionTimings;
 +import org.bukkit.command.Command;
 +import org.bukkit.command.CommandSender;
 +import org.jetbrains.annotations.NotNull;
 +
 +/**
-+ * Sexidium linearstats: pull-only timing readout (L2-STATS).
++ * Linear linearstats: pull-only timing readout (L2-STATS).
 + *
 + * <p>Shape mirrors {@code CommandServerHealth} (assumed Bukkit Command with
 + * ctor/execute/empty-tabComplete; relocate package to match its real location
 + * if different — see patch header A2). Permission
-+ * {@code sexidium.command.linearstats} defaults to OP, mirrored from the tps
++ * {@code linear.command.linearstats} defaults to OP, mirrored from the tps
 + * permission setup (see base tps wiring; integrator must mirror the
 + * permissions.yml/default-OP entry if base declares tps there rather than in
 + * code).</p>
 + *
 + * <p>Output: one row per storage folder (world + folderType pinned to
-+ * {@code region|poi|entities} via {@code SexidiumLinearFolderNames},
++ * {@code region|poi|entities} via {@code LinearFolderNames},
 + * default {@code region}) with read/write/flush counts+avgs, load
 + * count, filesFlushed, dirtyDepth, failures — plus a TOTALS row. All values
 + * are pulled via {@code LinearFlushCoordinator.snapshots()} /
-+ * {@code RegionFileStorage#sexidium$stats()} (zero new storage fields, no
++ * {@code RegionFileStorage#linear$stats()} (zero new storage fields, no
 + * pushes, no extra threads). Granularity is flush-granularity (event fires
 + * once per {@code flushDirty()} with {@code >=1} file attempted; clean-no-ops
 + * fire nothing).</p>
@@ -100,10 +90,10 @@ index 0000000000000000000000000000000000000000..22222222222222222222222222222222
 +        super(name);
 +        this.setDescription("Shows Linear region timing stats (per-folder + totals)");
 +        this.setUsage("/linearstats");
-+        // Sexidium: permission default OP, mirrored from tps (A2 assumption).
++        // Linear: permission default OP, mirrored from tps (A2 assumption).
 +        // If base declares tps in permissions.yml/default-OP (not in code),
-+        // integrator must mirror `sexidium.command.linearstats` there too.
-+        this.setPermission("sexidium.command.linearstats");
++        // integrator must mirror `linear.command.linearstats` there too.
++        this.setPermission("linear.command.linearstats");
 +        this.setPermissionMessage("You do not have permission to use linearstats.");
 +    }
 +
@@ -122,8 +112,8 @@ index 0000000000000000000000000000000000000000..22222222222222222222222222222222
 +        for (Map.Entry<String, LinearRegionTimings.LinearFolderSnapshot> e : snaps.entrySet()) {
 +            String folder = e.getKey();
 +            LinearRegionTimings.LinearFolderSnapshot s = e.getValue();
-+            String folderType = SexidiumLinearFolderNames.inferFolderType(folder);
-+            String world = SexidiumLinearFolderNames.inferWorld(folder);
++            String folderType = LinearFolderNames.inferFolderType(folder);
++            String world = LinearFolderNames.inferWorld(folder);
 +            sender.sendMessage(String.format(
 +                "%s [%s]: read=%d (avg %d us) write=%d (avg %d us) flush=%d (avg %d us) load=%d filesFlushed=%d dirtyDepth=%d failures=%d",
 +                world, folderType,
@@ -155,21 +145,159 @@ index 0000000000000000000000000000000000000000..22222222222222222222222222222222
 +        return new ArrayList<>();
 +    }
 +}
+diff --git a/src/main/java/io/papermc/paper/command/PaperCommands.java b/src/main/java/io/papermc/paper/command/PaperCommands.java
+index 3deca0b4e95609dc95376a86b5cbd525729a1031..2489a3a4860642b2dae4845f6969548ba60fd18a 100644
+--- a/src/main/java/io/papermc/paper/command/PaperCommands.java
++++ b/src/main/java/io/papermc/paper/command/PaperCommands.java
+@@ -25,6 +25,7 @@ public final class PaperCommands {
+         COMMANDS.put("paper", new PaperCommand("paper"));
+         COMMANDS.put("mspt", new MSPTCommand("mspt"));
+         COMMANDS.put("tps", new io.papermc.paper.threadedregions.commands.CommandServerHealth()); // Folia - region threading
++        COMMANDS.put("linearstats", new CommandLinearStats("linearstats")); // Linear linearstats (A1 assumed tps anchor; adapt if brigadier-only)
+         COMMANDS.put("profiler", new io.papermc.paper.threadedregions.commands.CommandProfiler()); // Folia - region threading - profiler
+ 
+         COMMANDS.forEach((s, command) -> {
+diff --git a/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java b/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..881b0add8edba0addd45c881dd03daf11ebebf76
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearFlushBridge.java
+@@ -0,0 +1,73 @@
++package io.papermc.paper.linear;
++
++import net.linear.LinearFlushCoordinator;
++import net.linear.LinearRegionTimings;
++import org.bukkit.Bukkit;
++import org.bukkit.event.world.LinearRegionFlushCompletedEvent;
++import org.bukkit.plugin.Plugin;
++import org.jetbrains.annotations.NotNull;
++
++/**
++ * Linear linearstats: Paper-side flush-completion bridge (L2-STATS).
++ *
++ * <p>Fires {@link LinearRegionFlushCompletedEvent} (ASYNC {@code super(true)},
++ * see event javadoc) at flush granularity, OFF IO threads, only when
++ * {@code >=1} file was attempted. CALL-SITE ASSUMPTION (explicit, Paper-side
++ * save path, integrator to wire): this file provides
++ * {@link #notifyFlush(Plugin,String,long,long)} but ships NO call site; the
++ * integrator must wire it into the Paper-side save path (e.g., after
++ * {@code LinearFlushCoordinator.flushDirty()} in world save), passing the
++ * owning {@code Plugin} explicitly (the old
++ * {@code getProvidingPlugin(Bridge.class)} misuse is fixed via param; do NOT
++ * use it — the bridge class lives in server code, not a plugin jar). This
++ * helper drops clean-no-ops ({@code filesAttempted < 1}) and schedules the
++ * event via the async scheduler (Folia-safe: never on the Moonrise IO
++ * thread). If the async scheduler is absent on the target base, fall back to
++ * a documented sync fire with a comment (region scheduler sync delivery was
++ * considered and rejected for this stats-only signal).</p>
++ */
++public final class LinearFlushBridge {
++
++    private LinearFlushBridge() {
++    }
++
++    /**
++     * Paper-side entry point: schedules the flush-completed event off-IO.
++     *
++     * @param owningPlugin owning plugin for the async scheduler (explicit;
++     *     fixes the old {@code getProvidingPlugin} misuse — the bridge is
++     *     server code, not a plugin; integrator passes the Paper plugin
++     *     instance at the wired Paper-side save-path call site)
++     * @param folderKey absolute folder-path key (as in {@code snapshots()})
++     * @param filesAttempted number of files the flush attempted ({@code >=1} to fire)
++     * @param elapsedMicros wall time for the flush batch
++     */
++    public static void notifyFlush(final @NotNull Plugin owningPlugin, final String folderKey, final long filesAttempted, final long elapsedMicros) {
++        if (filesAttempted < 1) {
++            return; // flush-granularity + clean-no-op suppression
++        }
++        final LinearRegionTimings.LinearFolderSnapshot totals;
++        try {
++            totals = LinearFlushCoordinator.snapshots().getOrDefault(folderKey, LinearRegionTimings.LinearFolderSnapshot.EMPTY);
++        } catch (RuntimeException ignored) {
++            return;
++        }
++        final String folderType = LinearFolderNames.inferFolderType(folderKey);
++        final String worldName = LinearFolderNames.inferWorld(folderKey);
++        final long filesFlushed = totals.filesFlushed();
++        final long failures = totals.failures();
++        // OFF IO threads: async scheduler (assumed present on 26.x; see A4).
++        try {
++            Bukkit.getAsyncScheduler().runNow(
++                owningPlugin,
++                task -> Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
++                    worldName, folderType, filesFlushed, failures, elapsedMicros, totals)));
++        } catch (RuntimeException fallback) {
++            // Fallback (documented): if the async scheduler is absent, fire
++            // synchronously so no completion is silently lost (still at flush
++            // granularity, still only when filesAttempted >= 1).
++            Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
++                worldName, folderType, filesFlushed, failures, elapsedMicros, totals));
++        }
++    }
++}
+diff --git a/src/main/java/io/papermc/paper/linear/LinearFolderNames.java b/src/main/java/io/papermc/paper/linear/LinearFolderNames.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..76b182835b17c120c28f4c32904b9aa4574e5734
+--- /dev/null
++++ b/src/main/java/io/papermc/paper/linear/LinearFolderNames.java
+@@ -0,0 +1,41 @@
++package io.papermc.paper.linear;
++
++/**
++ * Linear linearstats: shared folder-identity helper (L2-STATS).
++ *
++ * <p>Single shared helper for {@code folderType}/{@code world} inference
++ * (de-duplicated from the command + bridge). {@code folderType} domain is
++ * pinned to {@code region|poi|entities} inferred from the absolute
++ * folder-path suffix (default {@code region}); {@code world} is the parent
++ * dir name ({@code .../<world>/<type>}). Granularity is flush-granularity:
++ * the event fires once per coordinator {@code flushDirty()} that attempted
++ * {@code >=1} file (clean-no-op flushes fire nothing).</p>
++ */
++public final class LinearFolderNames {
++
++    private LinearFolderNames() {
++    }
++
++    public static String inferFolderType(String folder) {
++        String f = folder.replace('\\', '/');
++        if (f.endsWith("/entities") || f.contains("/entities/")) {
++            return "entities";
++        }
++        if (f.endsWith("/poi") || f.contains("/poi/")) {
++            return "poi";
++        }
++        return "region";
++    }
++
++    public static String inferWorld(String folder) {
++        String f = folder.replace('\\', '/');
++        // Folder is .../<world>/<region|poi|entities>; world is the parent name.
++        int slash = f.lastIndexOf('/');
++        if (slash <= 0) {
++            return f;
++        }
++        String parent = f.substring(0, slash);
++        int slash2 = parent.lastIndexOf('/');
++        return slash2 < 0 ? parent : parent.substring(slash2 + 1);
++    }
++}
 diff --git a/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java b/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..3333333333333333333333333333333333333333 100644
+index 0000000000000000000000000000000000000000..35d0156560e9cd03292149ecea2b8d48c09ad843
 --- /dev/null
 +++ b/src/main/java/org/bukkit/event/world/LinearRegionFlushCompletedEvent.java
 @@ -0,0 +1,94 @@
 +package org.bukkit.event.world;
 +
-+import net.sexidium.LinearRegionTimings;
++import net.linear.LinearRegionTimings;
 +import org.bukkit.event.Event;
 +import org.bukkit.event.HandlerList;
 +import org.jetbrains.annotations.NotNull;
 +
 +/**
-+ * Sexidium linearstats: flush-granularity completion event (L2-STATS, ASYNC).
++ * Linear linearstats: flush-granularity completion event (L2-STATS, ASYNC).
 + *
 + * <p>ASYNC contract (decided vs region-scheduler sync delivery): this event
 + * extends {@code Event} with {@code super(true)} and is fired OFF IO threads
@@ -179,9 +307,9 @@ index 0000000000000000000000000000000000000000..33333333333333333333333333333333
 + * coordinator {@code flushDirty()} that attempted {@code >=1} file
 + * (clean-no-op flushes fire nothing). Carries the world/folder identity
 + * ({@code folderType} pinned to {@code region|poi|entities} via
-+ * {@code SexidiumLinearFolderNames}, default {@code region}) plus the
++ * {@code LinearFolderNames}, default {@code region}) plus the
 + * post-flush totals snapshot. Paper-side bridge
-+ * ({@code SexidiumLinearFlushBridge}) fires this; the integrator must wire
++ * ({@code LinearFlushBridge}) fires this; the integrator must wire
 + * the {@code notifyFlush} call site into the Paper-side save path (see patch
 + * header A5; no call site in this patch).</p>
 + *
@@ -213,7 +341,7 @@ index 0000000000000000000000000000000000000000..33333333333333333333333333333333
 +        long elapsedMicros,
 +        @NotNull LinearRegionTimings.LinearFolderSnapshot totals
 +    ) {
-+        super(true); // Sexidium: ASYNC event (off-IO via async scheduler; see javadoc contract).
++        super(true); // Linear: ASYNC event (off-IO via async scheduler; see javadoc contract).
 +        this.worldName = worldName;
 +        this.folderType = folderType;
 +        this.filesFlushed = filesFlushed;
@@ -253,131 +381,5 @@ index 0000000000000000000000000000000000000000..33333333333333333333333333333333
 +
 +    public static @NotNull HandlerList getHandlerList() {
 +        return HANDLERS;
-+    }
-+}
-diff --git a/src/main/java/io/papermc/paper/linear/SexidiumLinearFlushBridge.java b/src/main/java/io/papermc/paper/linear/SexidiumLinearFlushBridge.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..4444444444444444444444444444444444444444 100644
---- /dev/null
-+++ b/src/main/java/io/papermc/paper/linear/SexidiumLinearFlushBridge.java
-@@ -0,0 +1,73 @@
-+package io.papermc.paper.linear;
-+
-+import net.sexidium.LinearFlushCoordinator;
-+import net.sexidium.LinearRegionTimings;
-+import org.bukkit.Bukkit;
-+import org.bukkit.event.world.LinearRegionFlushCompletedEvent;
-+import org.bukkit.plugin.Plugin;
-+import org.jetbrains.annotations.NotNull;
-+
-+/**
-+ * Sexidium linearstats: Paper-side flush-completion bridge (L2-STATS).
-+ *
-+ * <p>Fires {@link LinearRegionFlushCompletedEvent} (ASYNC {@code super(true)},
-+ * see event javadoc) at flush granularity, OFF IO threads, only when
-+ * {@code >=1} file was attempted. CALL-SITE ASSUMPTION (explicit, Paper-side
-+ * save path, integrator to wire): this file provides
-+ * {@link #notifyFlush(Plugin,String,long,long)} but ships NO call site; the
-+ * integrator must wire it into the Paper-side save path (e.g., after
-+ * {@code LinearFlushCoordinator.flushDirty()} in world save), passing the
-+ * owning {@code Plugin} explicitly (the old
-+ * {@code getProvidingPlugin(Bridge.class)} misuse is fixed via param; do NOT
-+ * use it — the bridge class lives in server code, not a plugin jar). This
-+ * helper drops clean-no-ops ({@code filesAttempted < 1}) and schedules the
-+ * event via the async scheduler (Folia-safe: never on the Moonrise IO
-+ * thread). If the async scheduler is absent on the target base, fall back to
-+ * a documented sync fire with a comment (region scheduler sync delivery was
-+ * considered and rejected for this stats-only signal).</p>
-+ */
-+public final class SexidiumLinearFlushBridge {
-+
-+    private SexidiumLinearFlushBridge() {
-+    }
-+
-+    /**
-+     * Paper-side entry point: schedules the flush-completed event off-IO.
-+     *
-+     * @param owningPlugin owning plugin for the async scheduler (explicit;
-+     *     fixes the old {@code getProvidingPlugin} misuse — the bridge is
-+     *     server code, not a plugin; integrator passes the Paper plugin
-+     *     instance at the wired Paper-side save-path call site)
-+     * @param folderKey absolute folder-path key (as in {@code snapshots()})
-+     * @param filesAttempted number of files the flush attempted ({@code >=1} to fire)
-+     * @param elapsedMicros wall time for the flush batch
-+     */
-+    public static void notifyFlush(final @NotNull Plugin owningPlugin, final String folderKey, final long filesAttempted, final long elapsedMicros) {
-+        if (filesAttempted < 1) {
-+            return; // flush-granularity + clean-no-op suppression
-+        }
-+        final LinearRegionTimings.LinearFolderSnapshot totals;
-+        try {
-+            totals = LinearFlushCoordinator.snapshots().getOrDefault(folderKey, LinearRegionTimings.LinearFolderSnapshot.EMPTY);
-+        } catch (RuntimeException ignored) {
-+            return;
-+        }
-+        final String folderType = SexidiumLinearFolderNames.inferFolderType(folderKey);
-+        final String worldName = SexidiumLinearFolderNames.inferWorld(folderKey);
-+        final long filesFlushed = totals.filesFlushed();
-+        final long failures = totals.failures();
-+        // OFF IO threads: async scheduler (assumed present on 26.x; see A4).
-+        try {
-+            Bukkit.getAsyncScheduler().runNow(
-+                owningPlugin,
-+                task -> Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
-+                    worldName, folderType, filesFlushed, failures, elapsedMicros, totals)));
-+        } catch (RuntimeException fallback) {
-+            // Fallback (documented): if the async scheduler is absent, fire
-+            // synchronously so no completion is silently lost (still at flush
-+            // granularity, still only when filesAttempted >= 1).
-+            Bukkit.getPluginManager().callEvent(new LinearRegionFlushCompletedEvent(
-+                worldName, folderType, filesFlushed, failures, elapsedMicros, totals));
-+        }
-+    }
-+}
-diff --git a/src/main/java/io/papermc/paper/linear/SexidiumLinearFolderNames.java b/src/main/java/io/papermc/paper/linear/SexidiumLinearFolderNames.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..5555555555555555555555555555555555555555 100644
---- /dev/null
-+++ b/src/main/java/io/papermc/paper/linear/SexidiumLinearFolderNames.java
-@@ -0,0 +1,41 @@
-+package io.papermc.paper.linear;
-+
-+/**
-+ * Sexidium linearstats: shared folder-identity helper (L2-STATS).
-+ *
-+ * <p>Single shared helper for {@code folderType}/{@code world} inference
-+ * (de-duplicated from the command + bridge). {@code folderType} domain is
-+ * pinned to {@code region|poi|entities} inferred from the absolute
-+ * folder-path suffix (default {@code region}); {@code world} is the parent
-+ * dir name ({@code .../<world>/<type>}). Granularity is flush-granularity:
-+ * the event fires once per coordinator {@code flushDirty()} that attempted
-+ * {@code >=1} file (clean-no-op flushes fire nothing).</p>
-+ */
-+public final class SexidiumLinearFolderNames {
-+
-+    private SexidiumLinearFolderNames() {
-+    }
-+
-+    public static String inferFolderType(String folder) {
-+        String f = folder.replace('\\', '/');
-+        if (f.endsWith("/entities") || f.contains("/entities/")) {
-+            return "entities";
-+        }
-+        if (f.endsWith("/poi") || f.contains("/poi/")) {
-+            return "poi";
-+        }
-+        return "region";
-+    }
-+
-+    public static String inferWorld(String folder) {
-+        String f = folder.replace('\\', '/');
-+        // Folder is .../<world>/<region|poi|entities>; world is the parent name.
-+        int slash = f.lastIndexOf('/');
-+        if (slash <= 0) {
-+            return f;
-+        }
-+        String parent = f.substring(0, slash);
-+        int slash2 = parent.lastIndexOf('/');
-+        return slash2 < 0 ? parent : parent.substring(slash2 + 1);
 +    }
 +}

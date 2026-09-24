@@ -22,10 +22,14 @@ Referenced but not included:
 
 | Artifact | Where |
 |---|---|
-| Paperclip jar | Built locally, or `folia-<mcversion>-<build>.jar` from the GitHub release for a `v*` tag |
+| Paperclip jar | Built locally, or `folia-linear-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (legacy `v<mc>-linear.N` tags carry `folia-<mcversion>-<build>.jar`) |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
+
+Single source of truth: `versions/<line>/upstream.properties` (keys
+`FOLIA_REPO`, `FOLIA_BRANCH`, `FOLIA_REF`, `MC_VERSION`). The table below is
+the 26.1.x instantiation of that file; the workflow pins mirror it.
 
 | Component | Pin |
 |---|---|
@@ -51,7 +55,7 @@ deployed.
 java -version
 
 # 1. Stage the server directory.
-export SRV=/opt/sexidium/node1
+export SRV=/opt/folia-linear/node1
 mkdir -p "$SRV"
 cp <paperclip jar> "$SRV/"
 (cd "$SRV" && sha256sum -c - <<<"<expected sha>  <jar name>")   # must print OK
@@ -128,3 +132,35 @@ RUNG B DONE. (exit 0)
 $ bash rollback.sh --rung FORWARD ... --dry-run --worlds miningfarm
 DRY-RUN: would set region-format.format: LINEAR in <world>/paper-world.yml (exit 0)
 ```
+
+## 6. Per-version builds
+
+The supplement is version-scoped: each supported line lives in
+`versions/<branch>/` with its own pin (`upstream.properties`), `patches/`,
+`tests/` and `build-hunk.py`.
+
+```bash
+scripts/build.sh --mc 26.1.x   # this release line
+scripts/build.sh               # every folder in versions/
+```
+
+Each line produces its own paperclip jar. Release tags carry the **project
+version only** (`v1.4.0`); one release attaches one jar + `.sha256` per
+supported version, named `folia-linear-<mcversion>-<project>.jar` (so a
+`v1.4.0` release containing `26.1.x` at MC `26.1.2` ships
+`folia-linear-26.1.2-1.4.0.jar` + `.sha256`; a future `26.2.x` line at MC
+`26.2.1` would add `folia-linear-26.2.1-1.4.0.jar` + `.sha256` to the same
+release). Verify the sha256 shipped alongside the jar before
+`rollback.sh --expected-sha` will accept it.
+
+To release only some folders (a fix that applies to one line), dispatch the
+workflow manually on the tag with the `versions` input:
+
+```bash
+gh workflow run build.yml --ref v1.4.0 -f versions=26.1.x
+```
+
+Pushed tags always release every version. The `v26.1.2-linear.1..3` tags and
+their `folia-<mcversion>-<build>.jar` assets stay as history; the workflow
+still understands that legacy tag shape, but new releases use the project
+scheme.

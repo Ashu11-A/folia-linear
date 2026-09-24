@@ -1,4 +1,4 @@
-package net.sexidium;
+package net.linear;
 
 import static org.junit.jupiter.api.Assertions.*;
 

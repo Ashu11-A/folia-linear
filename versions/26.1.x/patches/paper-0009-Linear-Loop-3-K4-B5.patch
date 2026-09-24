@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: SUM <sum@sexidium.local>
+From: folia-linear <folia-linear@users.noreply.github.com>
 Date: Sat, 19 Sep 2026 04:05:05 -0300
-Subject: [PATCH] Sexidium Loop-3 integration (K4 constraint removal, B5
- upgrade un-stub, T1 test replacement)
+Subject: [PATCH] Linear Loop-3 integration (K4 constraint removal, B5 upgrade
+ un-stub, T1 test replacement)
 
 
 diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
@@ -18,7 +18,7 @@ index ff082250a46a545be79d7af17f4ec085d3bcdf7e..ff63995826f25d966c4253a1e927cbd8
              @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core. Mirrors Kaiiju linearFlushThreads (default 1).")
              public int flushMaxThreads = 1;
 diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
-index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..9c33476e797b83d7f19e7a53eae35b6de696ed52 100644
+index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..55257b03e975159be63aceeba22ad1dac458c50f 100644
 --- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
 +++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
 @@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
@@ -26,7 +26,7 @@ index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..9c33476e797b83d7f19e7a53eae35b6d
          }
  
 -        if (this.server.options.has("forceUpgrade")) {
-+        // Sexidium L3-B5: honor --recreateRegionFiles alone too (matches the Main.main gate condition).
++        // Linear L3-B5: honor --recreateRegionFiles alone too (matches the Main.main gate condition).
 +        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
              Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
          }

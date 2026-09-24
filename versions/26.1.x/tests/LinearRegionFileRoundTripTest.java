@@ -1,4 +1,4 @@
-package net.sexidium;
+package net.linear;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,7 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
  * reopen → read round-trip, including a simulated restart re-read.
  *
  * <p>Exercises EXACTLY the A3 contract surface (verified against
- * {@code patches/A3/folia-server/src/minecraft/java/net/sexidium/LinearRegionFile.java}
+ * {@code patches/A3/folia-server/src/minecraft/java/net/linear/LinearRegionFile.java}
  * and the integrated fork file, which differs only by
  * {@code implements AbstractRegionFile} + a {@code clear(ChunkPos)} override +
  * {@code @Override}s — same ctor and seven methods):
@@ -39,7 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Payloads are opaque bytes; no NBT/registries/datapacks are involved.
  *
  * <p>Target path when integrated:
- * {@code folia-server/src/test/java/net/sexidium/LinearRegionFileRoundTripTest.java}.
+ * {@code folia-server/src/test/java/net/linear/LinearRegionFileRoundTripTest.java}.
  */
 public class LinearRegionFileRoundTripTest {
 

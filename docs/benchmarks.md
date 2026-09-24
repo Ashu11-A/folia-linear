@@ -8,10 +8,11 @@ for the full list of open questions.
 
 | Measurement | Before | After | Saved |
 |---|---|---|---|
-| Fixture tree, SMP-like data | 128,961,741 B | 52,163,783 B | 59.6% |
 | Live SMP, all dimensions, level 1 | 24.99 GiB | 16.57 GiB | 33.7% |
-| Live SMP region files, level 1 to 22 | 16.57 GiB | 11.04 GiB | 33.4% |
-| Live SMP, Anvil to level 22 | 24.99 GiB | 11.04 GiB | 55.8% |
+| Live SMP, Anvil to level 22 (offline rewrite) | 24.99 GiB | 11.04 GiB | 55.8% |
+| Live SMP region files, level 1 to 22 (offline) | 16.57 GiB | 11.04 GiB | 33.4% |
+| Stress sweep, recommended level 6 vs Anvil | 24.99 GiB | 13.87 GiB | 44.5% |
+| SYNTHETIC fixture tree, SMP-like data (129 MB) | 128,961,741 B | 52,163,783 B | 59.6% |
 | Soak world | Anvil baseline | ~30% of the bytes | ~70% |
 
 Ratios depend heavily on what the world contains. Sparse dimensions compress
@@ -19,7 +20,7 @@ several times over; dense, heavily built overworlds are closer to 1.4x.
 
 ## Live SMP rollout, 2026-09-19
 
-Sexidium SMP, roughly 3.05M chunks, Folia `ver/26.1.x` at `62dc0f2`, Minecraft
+A production SMP server, roughly 3.05M chunks, Folia `ver/26.1.x` at `62dc0f2`, Minecraft
 26.1.2, Java 25.
 
 | Dimension | Anvil | Linear | Saved | % |
@@ -103,12 +104,34 @@ Run against a 129 MB SMP-like fixture tree on the release-candidate jar:
 
 ## Test suites
 
-- 9058 tests green on the patched fork, 22 skipped, zero failures.
-- 64 Linear-specific tests: 29 upgrader scan, 26 region-file coordinates, 6
-  broken-symlink guard, 3 round-trip.
+- 9066 tests green on the patched fork, 22 skipped, zero failures.
+- 70 Linear-specific tests in `LinearNmsTestSuite`.
 - Converter round-trip on fixtures: 107 files, 109,568 slots, zero diffs.
 - Builds are deterministic. The same source produced a byte-identical
   60,509,601 B paperclip jar on separate runs.
+
+## Stress sweep, levels 1–15, 2026-09-22/24
+
+Full SMP world on the `smp-test` staging node (6 GiB limit, 120 s stop grace).
+Each level: 3 runs on the pre-fix jar (baseline) + 3 on the fixed jar (rc),
+plus SIGKILL durability rows. Raw rows: `versions/26.1.x/bench/stress-1-22.csv`;
+per-level docs: `versions/26.1.x/bench/level-0N.md`.
+
+| Level | Size | Saved vs #1 | Shutdown base / rc | Verdict |
+|---|---|---|---|---|
+| 1 | 16.58 GiB | — | 80.0s / 70.4s | ⚠️ |
+| 3 | 16.04 GiB | 3.30% | 80.3s / 72.5s | ⚠️ |
+| 6 | 13.87 GiB | 16.37% | 74.4s / 72.3s | ⚠️ |
+| 9 | 13.45 GiB | 18.86% | 77.2s / 72.4s | ⚠️ |
+| 12 | 13.21 GiB | 20.33% | 84.3s / 120.9s SIGKILL, 2047 lost | base ⚠️ / rc ❌ |
+| 15 | 12.86 GiB | ~22.4% | 121s SIGKILL / not run | base ❌ |
+
+⚠️ = container peak touched ≥85% of 6 GiB (reclaimed, no OOM); every graceful
+shutdown saved every chunk at levels 1–9. ❌ = grace-expiry SIGKILL with chunk
+loss, reproduced 2/2. SIGKILL T+30 s loses ~100% of edited chunks pre-fix and
+~55% post-fix (age-based + opportunistic flush, ~2-minute cutoff). OOM kills
+could not be induced on the test workload. Levels 12 and above are not safe;
+level 6 is the recommended default.
 
 ## What is not measured
 

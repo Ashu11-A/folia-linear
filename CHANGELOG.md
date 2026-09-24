@@ -4,7 +4,32 @@ Tags follow the base Minecraft version: `v26.1.2-linear.N`.
 
 ## Unreleased
 
-- Release assets renamed from `sexidium-folia-<mcversion>.jar` to
+- **Fix (rc2, D2):** the `minecraft-0017` age-based flush never fired on its
+  own. Folia's autosave and plain `save-all` never reach
+  `LinearFlushCoordinator.flushDirty` (only `save-all flush`, shutdown
+  eviction and bound pressure do), so an EDIT workload accumulated dirty
+  files that only a manual flush or stop would drain ("never flushed" with
+  dirty pending). New `minecraft-0020`: every `markDirty` flushes the
+  longest-unflushed file when already age-eligible (bounded: one file per
+  call, caller thread, production frequencies `>=1`s only; test-only `<=0`
+  keeps explicit-`flushDirty` semantics). EDIT workloads self-drain within
+  ~`flush-frequency`; `save-all` without `flush` stays a no-op as specced.
+- **Fix (rc2, D1):** the rc `/linearstats` panel showed `lvl ?` for every
+  world. `inferWorld` yields the dimension id (`overworld`, `the_nether`,
+  `the_end` from `.../dimensions/minecraft/<id>/region`) while
+  `Bukkit.getWorld` wants the level name (`smp-test`, ...). Level lookup now
+  tries the direct name, then matches
+  `ServerLevel.dimension().identifier().getPath()` across loaded worlds;
+  still `?` when unresolvable, never throws.
+- **Not done (Loop 5):** no `SX_JAVA_EXTRA_ARGS`-style JVM hook exists in
+  `docker/node-entry.sh` (`heap_args` only expands `SX_WORKER_MEMORY` /
+  `SX_LOBBY_MEMORY` plus fixed flags), so NMT
+  (`-XX:NativeMemoryTracking=summary`) cannot be enabled for smp-test via
+  env alone without touching the live-shared entrypoint. Untouched by design.
+
+- **Breaking:** `/linearstats` permission is now `linear.command.linearstats`;
+  the previous branded permission no longer works.
+- Release assets renamed to
   `folia-<mcversion>-<build>.jar`, where the build number increments for each
   release of the same Minecraft version. The name is derived from the tag, so
   `v26.1.2-linear.3` produces `folia-26.1.2-3.jar`. Assets on the three existing
@@ -39,9 +64,9 @@ Tags follow the base Minecraft version: `v26.1.2-linear.N`.
 - `/linearstats` command with per-folder and totals rows, plus
   `LinearRegionFlushCompletedEvent` fired async at flush granularity
   (`paper-0010`).
-- Paper API delegate `io.papermc.paper.linear.SexidiumLinearStats` so plugins
+- Paper API delegate `io.papermc.paper.linear.LinearStats` so plugins
   can read the counters without NMS imports (`paper-0011`).
-- `SexidiumLinearFolderNames` shared helper, pinning `folderType` to `region`,
+- `LinearFolderNames` shared helper, pinning `folderType` to `region`,
   `poi` or `entities`.
 - Tests: `LinearTimingInstrumentationTest`, `LinearStatsCommandTest`.
 - Operator notes gained a section on the readout, the event contract and the

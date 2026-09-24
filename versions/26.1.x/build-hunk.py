@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Augment Folia's build.gradle.kts.patch with the Sexidium build wiring.
+"""Augment Folia's build.gradle.kts.patch with the Linear build wiring.
 
 Two insertions, both byte-identical to the proven local build:
-1. Test source dir: lets the new net.sexidium/net.minecraft tests compile
+1. Test source dir: lets the new net.linear/net.minecraft tests compile
    (`srcDir("src/test/java")` alongside the paper-server test tree).
 2. zstd-dep hunk: paperweight-convention @@ header stock git cannot parse,
    so it is spliced in (never git-applied).
@@ -23,8 +23,8 @@ HUNK = """@@ -157,6 +_,11 @@ dependencies {
      implementation("me.lucko:spark-api:0.1-20240720.200737-2")
      implementation("me.lucko:spark-paper:1.10.152")
 +
-+    // Sexidium-Folia A6 (codec/native owner): zstd chunk codec. Pinned to the proven
-+    // Sexidium plugin classpath (packages/core uses 1.5.6-8); the fork pins no zstd
++    // folia-linear A6 (codec/native owner): zstd chunk codec. Pinned to the proven
++    // Linear plugin classpath (packages/core uses 1.5.6-8); the fork pins no zstd
 +    // version itself and lz4 arrives via vanilla, so no lz4 line is added here.
 +    implementation("com.github.luben:zstd-jni:1.5.6-8")
  }

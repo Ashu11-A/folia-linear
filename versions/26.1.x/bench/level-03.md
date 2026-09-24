@@ -1,0 +1,236 @@
+# Level 03 — baseline × 3 + rc2 × 3 + 2 SIGKILL rows — IN PROGRESS
+
+- `test=3` `level_confirmed=3` (3-source: config `compression-level: 3` in `paper-world-defaults.yml` + header audit 8383/8383 lvl=3 at offset 17 + 0 `[region-format]` fallback lines; baseline panel has no `lvl` token per paper-0010, rc token pending)
+- `jar=baseline` `jar_sha256=e609c1d439e7bdd68e68abccbcf02c818efe77fa4ae8d7ddc2914204ca0ee06b` (60532041 B, shadow-server + stress/jars identical)
+- `jar=rc2` `jar_sha256=b0ea20484d85e4adce697cb786bf164b6fa4865d9eb122b8c931910e2723e1d6` (60541066 B, stress/jars folia-rc.jar + folia-rc2.jar identical sha)
+- `ldm=0` `flush_threads=1` `compression_workers=0` (axis-1 defaults)
+- `bytes_anvil=26056405704` (frozen constant, S2-finalize 2026-09-22; NOT re-derived, source-anvil read-only)
+- `convert_s=724` (t0 07:02:17Z→t1 07:14:21Z; per-dim walls 643.0+11.4+61.1=715.5s, threads 3/1/1, empty `level-3/` dir, ≤8 threads)
+- `bytes_on_disk=17213566501` (≈16.03 GiB; OW 16769212135 + nether 165033691 + end 279320675; per-folder `du -sb`, manifests excluded; ratio vs Anvil 0.6607, 33.93% saved; saved vs #1 3.30%)
+- Conversion (`mca2linear -c 3` per-dim via `worker-1` python3): OW 7382 files in=23318872064 out=16769212135 ratio=0.719 wall=643.0s; nether 117 files in=274874368 out=165033691 ratio=0.600 wall=11.4s; end 884 files in=2462646272 out=279320675 ratio=0.113 wall=61.1s; all `EXIT=0`, `DONE-ALL`; 0 `.mcc`; free 28G→12G (floor 12≥8 PASS)
+- Verify (decode-back workaround, harness `verify_level` broken by construction): header audit 8383/8383 lvl=3 bad=0 (offset 17, `>QBQbhI` field 4); manifest src_sha cross-check 7382+117+884=8383/8383 mism=0 missing=0 (`level-3` convert.manifest `src_sha` == `source-anvil` decode `dst_sha`, joined on `.mca` rel); forceload-subset (16 files) `linear2mca` + `verify` per-dim 12/2/2 files all `total diffs=0`; full-tree decode-back NOT attempted (needs ~23G temp, free 12G — would breach floor; manifests + headers + subset are the honest gate; temp subset dirs wiped)
+- Pristine: 16 files (OW 4×(region+entities+poi)=12 + nether 2 + end 2) 29M + `pristine.sha256` 16 lines; `EXPECTED.json` 6144 keys (edit-workload.py gen --level 3, sha scheme verified) + `commands-y319.txt` 6144 setblocks + `commands.txt` copy staged (mirror `level-3/`)
+- Staging (move, not copy — same `/dev/sda6`, rename instant, free 12G): backed up small world (1060488 B + 3 configs) to `level-3/smp-test-small-backup`; moved 8 dirs `level-3/tree/{dims}/{region,entities,poi}` → `smp-test/.../dimensions/minecraft/...` (world region counts OW 2502 / nether 64 / end 676); `TREE` left with manifests only; set `compression-level: 3`, `log-flush-batches: true`; appended NMT to `sexidium-node.args`
+- Smoke boot baseline 07:16:35Z `Done (10.288s)`, 0 fallback lines, config-readback level 3 → `level_confirmed=3`; console live-fire `linearstats` → `{"ok":true}` + baseline panel (9 folders, plain `dirtyDepth`, C4 as expected)
+
+## Runs (IN PROGRESS — 4/8: baseline COMPLETE + rc r1 done, r2+r3 + 2 kills pending)
+
+| run | boot_s | load_s (+evidence grade) | save_all_s | flush p50/p99 | dirty_at_stop | shutdown_s | exit/oom | tick_p99 | mem steady/peak | chunks lost | free± |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| b1 (cold-ish) | 9.9 | 354.5 (per-chunk; 6144/6144 Changed; C1+C2 recipes; stale head-start caveat) | n/a (never-invoked; 90s cap, 0 movement; 03-H2/H3) | -/- (baseline absent, correct) | 56 | 83.3 | 143/0 | -1 (mspt-no-response; 91 polls, 0 pairs) | heap 1616/2872, rss 5411/6137, nmt 6515, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 12→12 (no breach) |
+| b2 (warm) | 10.9 | 354.6 (per-chunk; 21×300 batches, exact +300/batch fresh growth, no head-start) | n/a (never-invoked; 90s cap, 0 movement; 03-H2/H3) | -/- (baseline absent, correct) | 55 | 80.3 | 143/0 | -1 (mspt-no-response; 89 polls, 0 pairs) | heap 1304/3072, rss 5457/6133, nmt 6467, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 12→12 (no breach) |
+| b3 (warm, last baseline) | 10.4 | 355.1 (per-chunk; 21×300 batches, exact +300/batch fresh growth) | n/a (never-invoked; 90s cap, 0 movement; 03-H2/H3) | -/- (baseline absent, correct) | 56 | 76.3 | 143/0 | -1 (mspt-no-response; 89 polls, 0 pairs) | heap 1324/3072, rss 5467/6137, nmt 6402, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 12→12 (no breach) |
+| r1 (rc, warm, autosave-watch) | 10.4 | 355.7 (per-chunk; 21×300 batches, exact +300/batch fresh growth) | n/a (never-invoked; 150s cap, movement true = background age-flush, NOT save-all; 03-H2/H3) | 1000/1000 (rc panel) | 39 | 72.5 | 143/0 | -1 (mspt-no-response) | heap 1638/3072, rss 5469/6120, nmt 6754, cgroup 6144.0 (100% cap touched, no OOM; NMT on) | 0/6144 (real nbtlib verify, 6144 ok) | 12→12 (no breach) |
+
+CSVs: 1 row appended (test=3 baseline run 1); sidecars in mirror `samples/3-baseline-1/` (26 files, mem-series 836). Per-run wipe done (logs/cache only, tree stays in `smp-test` volume); `free_after_wipe_gib` corrected `-1→12` (df transport was worker-1-down, not a missed wipe — `logs/` verified empty 07:41Z; df now via worker-2).
+
+Medians (renderer-computed; warm medians for boot/load per agent 32 §6):
+`baseline FINAL n=3: shutdown median 80.3s (83.3, 80.3, 76.3); dirty median 56; boot warm median 10.6s (b2 10.851 + b3 10.44; b1 cold-ish 9.945 excluded); load warm median 354.9s (b2 354.6 + b3 355.1; b1 354.5 calibration-adjacent kept out per §5)`
+
+## Evidence (run b1)
+
+- Boot: start 07:17:24Z → `Done (9.945s)`; 0 `[region-format]` lines (healthy, no fallback); config-readback level 3 + headers 8383 lvl=3 → `level_confirmed=3`; `jar_sha256` e609c1d4 (shadow, untouched since L1 close-out); `smp1_players=0` (live-log read, no live command); `started_at=2026-09-23T07:17:21Z`
+- Load: forceload 24-add C1 recipe → query **4096/1024/1024 exact**; pass 1 staged 6144 EDITs in 21×300 batches → `load_s=354.5` (acks 6144/6144 from batch 6 — stale head-start from prior-run log tails in the cumulative 20000-line scan, same caveat as L1 b2/b3; exact batch delivery proven by 21/21 BATCH_DONE); pass 2 redirty identical setblocks → all 21 BATCH_DONE, `load_s=-256.1` DISCARDED by design (pass-2 timing never enters CSV); `load_evidence=per-chunk`
+- Age-wait (autosave-watch, run-1 baseline): 15s + 65s, flush 0→0 + dirty 55→55 → `autosave_reaches_flush=false` (S1 reproduced on L3: steady-state no-flush on baseline)
+- Save-all: `save-all flush` POST → `{"ok":true}`; 90s capped poll, NO completion line; pre dirty 55 + W>0, post 2 reads (5s + 30s) zero movement (`flush` 0→0) → `save_all_s=n/a (never-invoked)` per spec 33 §7 (cite 03-H2, 03-H3, 02-Unknowns); C3 reproduced on L3
+- Flush: baseline plain panel → `flush_p50_ms=-1`, `flush_p99_ms=-1` (absent, correct per spec 33 §4); no batch lines (expected per spec 33 §3.5)
+- Shutdown: SIGTERM → exit = **83.3s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (`Stopping server`, `Saved all worlds`, `All RegionFile I/O tasks`); dirty_at_stop 56; 0 `Failed to flush`. Under 96 (no trigger)
+- Tick: 91 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as L1 b2/b3/runs; sidecars `mspt.txt` + `tick-series-*.json` 0 pairs + `tick-cooked.json`)
+- Mem: 836 samples ~1Hz: heap steady **1616** / peak **2872**; rss steady 5411 / peak (HWM) 6137; **nmt committed peak 6515** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill (95% guard flagged throughout, flag only — same as L1 precedent)
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs staged EXPECTED-3 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`** (`verify.json` in mirror). `flush_failures=0`; `level_fallback_severe=0`
+- Disk: `free_before_gib=12` → `free_after_wipe_gib=12` (corrected, see above; floor 12≥8 holds, abort <8 never triggered)
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (b1 only, n=1 — NOT a level verdict)` — shutdown 83.3s <96 (no trigger); cgroup 6144.0 = 100% cap → WARN-side `peak>=85%` datum when renderer runs (same as L1). No ❌ (exit 143, 0 lost, 0 failures, 0 OOM, fallback 0). STOP+REPORT triggers: none (floor 12≥8 holds, level_confirmed=3, no ❌) — CONTINUE to b2.
+
+## Blockers / anomalies
+
+- **Live incident (not mine, read-only observed): ~07:38:23–07:39:01Z proxy + lobby + worker-1 stopped with clean graceful shutdowns** (coordinated, operator-side; smp-1 alive, 0 players). Impact on L3: worker-1 (console/df host) down → b1's `clean_run` df + `stop_check` df failed (`free=-1` → driver STOP exception AFTER the row was recorded; CSV `free_after_wipe_gib=-1`, corrected to 12). Recovery (no live mutation): console + df moved to worker-2 (smc.py/smc_batch.py staged, shas verified; `C.WORKER=P.WORKER="worker-2"` in l3run.py); live containers NOT restarted (read-only rule). smp1_players=0 throughout.
+- C6 future-skipped=0 all batches (no midnight crossing). No `level_fallback_severe`, no ❌, no OOM kill (cap touched 100% on b1, reclaimed, exit 143), no floor breach (12≥8; 8G waiver holds), no live writes (only `stress/level-3/*` + `smp-test` volume via host volume paths + container execs; `smp-1` untouched). `run-queue.json` left `done:["1"]` (NOT complete — 1/8 runs).
+
+## Evidence
+
+- Pre-run gates verified 2026-09-23 (all read-only unless noted):
+  - `smp-test` container PRESENT but STOPPED (L1 close-out state); logs readable; no exec (409 not-running, expected).
+  - Free: **28 GiB** (`df --output=avail -B1G /srv/build` via worker-1) ≥ 17+5 GiB need, ≥ 8 GiB floor → PASS. Abort <8G armed.
+  - Lock: standing `sleep 200000` reservation (PID 3159562, since 11:25Z Sep-22) holds `stress/harness.lock`; no active driver (no mca2linear/l1run/l3run/p0run on host), no converter contention → one-run rule satisfied under L1 precedent (no second lock, no break).
+  - Jars on host: `stress/jars/folia-baseline.jar` e609c1d4 ✓, `folia-rc.jar` + `folia-rc2.jar` b0ea2048 ✓ (identical).
+  - Shadow jar: baseline e609c1d4 ✓ (L1 close-out restored). Small world 1046710 B ✓. Config `compression-level: 6` + `log-flush-batches: false` (L1 close-out) — set to 3/true at staging.
+  - Patched plugin `sexidium-paper-26.1.2+16.jar` 21997aad ✓. NMT absent (L1 reverted) — re-add at staging, revert at close-out.
+  - Console path: `worker-1:/tmp/smc.py` sha `bff98d8c…` == fork `bench/smc.py` ✓; `smc_batch.py` staged ✓; `nbtlib` 2.0.4 on worker-1 + local ✓.
+  - smp-test volume NMT/config/plugin verified via host volume paths (sudo -S, read-only).
+  - source-anvil intact (overworld/the_nether/the_end + convert.manifests); converter `/srv/build/repo/scripts/vendor/mca2linear-convert.py` present; `convert.lock/` empty.
+  - Workload artifacts generated offline (local): `level-3/EXPECTED.json` 6144 keys (edit-workload.py gen --level 3, y=319 OW per C2) + `commands-y319.txt` 6144 setblocks + `commands.txt` copy; sha scheme `sha256("dim|cx|cz|mat|level")` level=3 verified on 2 sample keys.
+  - Driver `loop4-P0-mirror/l3run.py` (from `l1run.py`: LEVEL=3, staged L3 EXPECTED, b1 target added, k_boom/k_room disabled per C7 charter, tags `3-*`); py_compile OK.
+  - `smp1_players` via live-log read only (no live commands). Live stack untouched.
+- Calibrations reused from L1 (level-01.md, NOT re-derived): C1 forceload 24-add block-coord recipe (256-chunk limit); C2 OW y=319 (already in edit-workload.py DIM_Y); C3 save-all no-op → capped poll + §7 movement rule; C4 baseline panel no lvl/p50/p99 (config+headers confirm); C5 header level byte at offset 17 (`>QBQbhI` field 4; harness `confirm_level_disk` reads d[8]=VERSION — report, not fix); C6 exclude future-dated acks (midnight-rollover guard in parse_feedbacks + tick sampler); C7 scoped-cgroup OOM uninducible 2G→128M — NO OOM attempts on L3 (SIGKILL-only kills).
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS — no rows` — conversion pending. STOP+REPORT triggers armed: floor breach (<8G), level_confirmed≠3, any SIGTERM ❌.
+
+## Blockers / anomalies
+
+- None. OOM rows excluded by charter (C7). EDIT-600 eviction NOT in charter L3 (skip — base 6144 only).
+
+## Run b2 (warm) — baseline run 2 done 2026-09-23 07:44:53Z→08:08:01Z (driver `loop4-P0-mirror/l3run.py b2`)
+
+- Gates re-verified: free **12 GiB ≥ 8 floor** (abort <8 never triggered, 12→12); lock = standing `sleep 200000` reservation (no active driver besides this run); jar baseline `e609c1d4` (shadow + symlink, no swap); config `compression-level: 3` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; pristine 16/16 sha OK (host-cp WORLD-only restore, server STOPPED after unmeasured stop); EXPECTED-3 6144 keys + `commands-y319.txt`; patched plugin `21997aad`; console via worker-2 (`smc.py`/`smc_batch.py` staged, shas verified); `smp1_players=0` (live-log read, no live command); NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.851`; 0 `[region-format]` fallback → `level_confirmed=3` (baseline 3-source rule: config 3 + headers 8383 lvl=3 + 0 SEVERE).
+- Load: forceload 24-add C1 recipe → query **4096/1024/1024 exact**; pass 1 staged 6144 EDITs in 21×300 batches → `load_s=354.6` (exact +300/batch fresh growth batches 1–14, 6144 at batch 14 — NO stale head-start, cleaner than b1); pass 2 redirty identical setblocks → all 21 BATCH_DONE, `load_s=-224.1` DISCARDED by design.
+- Settle: 60s (run 2, no autosave-watch — watch is run-1-per-jar only).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 90s capped poll, NO completion line; pre dirty + W>0, post 2 reads zero movement → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced b1+b2).
+- Flush: baseline plain panel → `flush_p50_ms=-1`, `flush_p99_ms=-1` (absent, correct); no batch lines (expected).
+- Shutdown: SIGTERM → exit = **80.3s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt`; dirty_at_stop 55; 0 `Failed to flush`. Under 96 (no trigger; **3.0s under b1**).
+- Tick: 89 `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response` (same as b1/L1).
+- Mem: 820 samples ~1Hz: heap steady **1304** / peak **3072** (= Xmx, saturated); rss steady 5457 / peak (HWM) 6133; **nmt committed peak 6467**; **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only).
+- Safety (REAL decode-back verify, step 7): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib verifier vs EXPECTED-3 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk: `free_before_gib=12` → `free_after_wipe_gib=12` (per-run wipe logs/cache only; df via worker-2 OK this run).
+- Sidecars: mirror `samples/3-baseline-2/` 24 files synced BEFORE wipe.
+
+## Run b3 (warm, last baseline) — baseline run 3 done 2026-09-23 08:13:21Z→08:36:27Z (driver `loop4-P0-mirror/l3run.py b3`)
+
+- Gates re-verified: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation (this run only); jar baseline `e609c1d4`; config level 3 + globals; pristine 16/16 sha OK; EXPECTED-3 + commands; plugin `21997aad`; console via worker-2; `smp1_players=0`; NMT **ON**; `nbtlib` local.
+- Boot: `boot_s=10.44`; 0 fallback → `level_confirmed=3`.
+- Load: forceload **4096/1024/1024 exact**; pass 1 → `load_s=355.1` (exact +300/batch fresh growth); pass 2 all 21 BATCH_DONE, `load_s=-224.5` DISCARDED by design.
+- Settle 60s. Save-all: `{"ok":true}`, 90s cap, NO completion, 0 movement → `n/a (never-invoked)` (C3 reproduced b1+b2+b3).
+- Flush: baseline absent → `-1/-1` (correct). Shutdown: **76.3s**, `ExitCode=143`, `OOMKilled=false`; clean checklist; dirty_at_stop 56; 0 failures. Under 96.
+- Tick: 89 polls, 0 pairs → `-1 mspt-no-response`. Mem: 829 samples; heap **1324/3072**; rss 5467/6137; **nmt 6402**; **cgroup 6144.0 = 100% cap**, reclaimed, NO OOM.
+- Safety: 6 files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3: **6144 ok / 0 lost**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk 12→12. Sidecars: mirror `samples/3-baseline-3/` 24 files BEFORE wipe.
+
+## Baseline FINAL medians (3/3)
+
+- `lvl 3, n=3, WARN (peak>=85% side), shutdown median 80.3s (83.3, 80.3, 76.3 — spread 9% of median, no ± needed), dirty median 56, lost 0+0+0, exits 143×3, flush absent, save n/a ×3, tick -1 ×3, cgroup 6144.0 (100% cap, reclaimed, no OOM)`. Boot warm median 10.6s; load warm median 354.9s (tight spread 354.5–355.1, decode-stable).
+- vs L1 anchor: shutdown 80.0→80.3s (no change); load 354.8→354.9s (no change, decode-independent as expected); size 17801732197→17213566501B (saved_vs_#1 3.30% now computable for L3).
+- No ❌. STOP+REPORT triggers: none — CONTINUE to r1 (first rc: swap shadow→rc2 b0ea2048).
+
+## Run r1 (rc, autosave-watch) — rc run 1 done 2026-09-23 08:45:33Z→09:10:16Z (driver `loop4-P0-mirror/l3run.py rc1`, FIRST rc run — jar swap baseline→rc2 included)
+
+- Swap (rc1 only): host-fetch rc2 `CACHED b0ea20484d85` → `sha256sum -c` `rc.jar: OK` → cp to shadow + node jars → `sha256sum` `b0ea20484d85e4adce697cb786bf164b6fa4865d9eb122b8c931910e2723e1d6` (60541066 B, matches pin) → restart ONLY `sexidium-smp-test` → boot 10.143s. Live stack untouched (read-only `status` for `smp1_players` only; proxy/lobby/worker-1 still down since 07:38Z — not mine, not restarted).
+- Gates re-verified: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation; config `compression-level: 3` + globals; pristine 16/16 sha OK; EXPECTED-3 + commands; plugin `21997aad`; console via worker-2; `smp1_players=0`; NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.395`; rc panel `lvl 3` on all 3 dims (overworld/the_end/the_nether) + 0 `[region-format]` fallback → `level_confirmed=3` (spec 32 §4 rc source).
+- Load: forceload **4096/1024/1024 exact**; pass 1 → `load_s=355.7` (exact +300/batch fresh growth); pass 2 all 21 BATCH_DONE, `load_s=-318.9` DISCARDED by design.
+- Age-wait (autosave-watch, run-1 rc): 15s (rc age gate) + 65s, flush 9→9 + dirty 55→55 → `autosave_reaches_flush=false` (same as L1 r1 — periodic age-flush did NOT move counters in this settle window; the dirty drop comes later via save window + shutdown drain).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 150s capped poll, NO completion line; pre dirty 55 + flush 9, post flush movement true = background age-flush, NOT save-all effect → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced on rc).
+- Flush: rc panel (`paper-0013`, 9 folders, all `lvl 3`, last-flush 1m42s–2m0s): prestop dirty **39** vs baseline 56 — **−30%**; overall `flush_p50/p99=1000/1000ms`; `flush_failures=0`.
+- Shutdown: SIGTERM → exit = **72.5s**, `ExitCode=143` clean, `OOMKilled=false`; clean checklist; dirty_at_stop 39; 0 failures. Under 96 (**7.8s under the baseline median 80.3s**).
+- Tick: `mspt` polls, **0 response pairs** → `tick_p99_ms=-1` reason `mspt-no-response`.
+- Mem: 873 samples ~1Hz: heap steady **1638** / peak **3072**; rss steady 5469 / peak 6120; **nmt 6754**; **cgroup 6144.0 = 100% cap**, reclaimed, NO OOM.
+- Safety: 6 files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3: **6144 ok / 0 lost**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk 12→12. Sidecars: mirror `samples/3-rc-1/` 26 files BEFORE wipe.
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (baseline FINAL n=3 + rc n=1 provisional)` — baseline medians `shutdown 80.3s, why=peak>=85%` (unchanged). rc r1 provisional (NOT a level verdict): shutdown 72.5s <96, dirty 39 (−30% vs baseline 56), lost 0, exit 143 — direction matches the m0017 age-flush expectation (cut dirty/shutdown) but n=1 proves nothing yet; need r2+r3 + 2 kills. No ❌. STOP+REPORT triggers: none — CONTINUE to r2.
+
+## Run b3 (warm)
+
+baseline run 3 done: boot=10.44 load=355.1 save=-1 shut=76.3 exit=143 lost=0/6144 dirty=56 tick=-1 cgroup_peak=6144.0
+
+## Run r1 (rc, autosave-watch)
+
+rc run 1 done: boot=10.395 load=355.7 save=-1 shut=72.5 exit=143 lost=0/6144 dirty=39 tick=-1 cgroup_peak=6144.0
+
+## Run r2 (rc)
+
+rc run 2 done: boot=10.106 load=360.2 save=-1 shut=66.4 exit=143 lost=0/6144 dirty=37 tick=-1 cgroup_peak=6144.0
+
+## Run r2 (rc, warm) — rc run 2 done 2026-09-23 11:05:55Z→11:30:04Z (driver `loop4-P0-mirror/l3run.py rc2`; NO jar swap — shadow already rc2 b0ea2048 since r1; REDO of the 09:15Z attempt cancelled mid-run, whose partial sidecars were moved aside to `samples/3-rc-2-invalid-0940Z/` and contribute no row)
+
+- Gates re-verified: free **12 GiB ≥ 8 floor** (abort <8 never triggered, 12→12); lock = standing `sleep 200000` reservation (PID 3159562, no active driver — no second lock, no break); jar rc2 `b0ea2048` (shadow + node jars, no swap); config `compression-level: 3` + globals threads 1/workers 0/LDM 0/freq 10/log-batches true; pristine 16/16 sha OK (double restore: pre-run unmeasured-stop restore + `run_axis` restore); EXPECTED-3 6144 keys + `commands-y319.txt`; plugin `21997aad` (established); console via worker-2; `smp1_players=0` (live-log read, no live command); NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.106`; rc panel `lvl 3` on all 3 dims (overworld/the_end/the_nether) + 0 `[region-format]` fallback → `level_confirmed=3` (spec 32 §4 rc source).
+- Load: forceload 24-add recipe → query **4096/1024/1024 exact** (both passes); pass 1 staged 6144 EDITs in 21×300 batches → `load_s=360.2` (batch-1 acks 3504 head-start from r1 log tail, exact +300/batch fresh growth to 6144 at batch 10 proves fresh; C6 future-skipped=0 all 21 batches; ~1.4% above the 354.5–355.7 band — honest batch-cadence variance, no correction); pass 2 redirty identical setblocks → all 21 BATCH_DONE, `load_s=-287.7` DISCARDED by design (pass-2 acks stale-dominated; delivery proven by BATCH_DONE + 0-lost verify below).
+- Settle: 60s (run 2, no autosave-watch — watch is run-1-per-jar only).
+- Save-all: `save-all flush` POST → `{"ok":true}`; 150s capped poll, NO completion line; pre dirty + flush 9, post flush 27 (movement true = background age-flush, NOT save-all effect) → `save_all_s=n/a (never-invoked)` per spec 33 §7 (C3 reproduced b1+b2+b3+r1).
+- Flush: rc panel (9 folders, all `lvl 3`): prestop dirty **37** (OW ent 13 + OW region 10 + end ent 3 + end region 6 + nether ent 4 + nether region 1) vs r1 39 / baseline 56 — **−34% vs baseline**; overall `flush_p50/p99=1000/1000ms`; `flush_failures=0`.
+- Shutdown: SIGTERM → exit = **66.4s**, `ExitCode=143` clean, `OOMKilled=false` (docker wait BEFORE step-7 restart); clean checklist in `tail-stop.txt` (`Stopping server`, `Saved all worlds`, `All RegionFile I/O tasks`); dirty_at_stop 37; 0 `Failed to flush`. Under 96 (no trigger; **13.9s under the baseline median 80.3s, 6.1s under r1**).
+- Tick: 93 `mspt` polls, **0 response blocks** → `tick_p99_ms=-1` reason `mspt-no-response` (same as b2/b3/r1; sidecars `mspt.txt` + `tick-series-*.json` 0 pairs + `tick-cooked.json`).
+- Mem: 854 samples ~1Hz: heap steady **1238** / peak **3072** (= Xmx, saturated); rss steady 5214 / peak (HWM) 6112; **nmt committed peak 6535** (NMT on); **cgroup 6144.0 MiB = 100.0% of 6GiB** — cap touched, reclaimed, NO OOM kill. 95% guard flagged throughout (flag only, same as b1/b2/b3/r1 precedent).
+- Safety (REAL decode-back verify, step 7): post-shutdown fetch of 6 region files BEFORE restart → reboot → local `linear2mca` per-dim (errors=0) → `chunks-lost-verify.py` (nbtlib, y=319) vs EXPECTED-3 + EDITLOG-2: **6144 ok / 0 missing / 0 stale / 0 unknown → `chunks_lost=0`** (`verify.json` in mirror `samples/3-rc-2/`). `flush_failures=0`; `level_fallback_severe=0`.
+- Disk: `free_before_gib=12` → `free_after_wipe_gib=12` (per-run wipe: logs/cache/crash-reports only, tree stays in `smp-test` volume for r3; df assert 12→12, floor holds).
+- Sidecars: mirror `samples/3-rc-2/` 24 files (EDITLOGs, EXPECTED×2, panels, stats, mem-series 854, tick-series, verify, tail-stop; no autosave-watch — run 2) synced BEFORE wipe (driver writes direct to mirror; host `clean_run` only touches logs/cache).
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`IN PROGRESS (baseline FINAL n=3 unchanged + rc n=2 provisional)` — baseline medians stay `shutdown 80.3s, why=peak>=85%` (renderer line above untouched). rc provisional n=2 (NOT a level verdict): shutdown median 69.5s (72.5, 66.4) <96, dirty 39→37 (−30%→−34% vs baseline 56), load median 358.0s (355.7, 360.2), boot median 10.3s (10.395, 10.106), lost 0+0, exits 143+143, 0 failures — m0017 age-flush direction holds across both rc runs; need r3 + 2 kills. No ❌ (single ❌ would mark the level — none seen). STOP+REPORT triggers: none (floor 12≥8 holds, level_confirmed=3, no ❌) — CONTINUE to r3.
+
+## Run r3 (rc)
+
+rc run 3 done: boot=10.399 load=371.7 save=-1 shut=84.4 exit=143 lost=0/6144 dirty=41 tick=-1 cgroup_peak=6144.0
+
+## Run r3 (rc, warm, last axis run) — rc run 3 done 2026-09-23 11:32:08Z→11:57:55Z (driver `loop4-P0-mirror/l3run.py rc3` + C6 guard; NO jar swap — shadow already rc2 b0ea2048 since r1)
+
+- Gates re-verified: free **12 GiB ≥ 8 floor** (abort <8 never triggered, 12→12); unmeasured stop of the r2 post-verify idle server at run start (no row, routine); lock = standing `sleep 200000` reservation (PID 3159562, no active driver); jar rc2 `b0ea2048`; config `compression-level: 3` + globals; pristine 16/16 sha OK; EXPECTED-3 + commands; plugin `21997aad`; console via worker-2; `smp1_players=0`; NMT **ON**; `nbtlib` local.
+- Boot: restore → start → `Done` → `boot_s=10.399`; rc panel `lvl 3` on all 3 dims + 0 fallback → `level_confirmed=3`.
+- Load: forceload **4096/1024/1024 exact** (both passes); pass 1 → `load_s=371.7` DIRECT (no midnight correction; C6 future-skipped=0 all 21 batches; batch-1 acks 3393 head-start from r2 log tail, +300/batch to 6144 at batch 11 proves fresh; ~3% above the 354.5–360.2 band — slower batch cadence ~17.7s, honest variance, no correction); pass 2 all 21 BATCH_DONE, `load_s=-291.7` DISCARDED by design.
+- Settle: 60s (run 3, no autosave-watch). Save-all: `{"ok":true}`, 150s cap, NO completion, post flush 9→43 (background age-flush, NOT save-all) → `n/a (never-invoked)` (C3 reproduced all 6 axis runs).
+- Flush: rc panel (9 folders, all `lvl 3`): prestop dirty **41** (OW ent 13 + OW region 11 + end ent 3 + end region 9 + nether ent 4 + nether region 1) vs r2 37 / r1 39 / baseline 56 — **−27% vs baseline** (hottest rc row: end region 9 vs 6); overall `flush_p50/p99=1000/1000ms`; `flush_failures=0`.
+- Shutdown: SIGTERM → exit = **84.4s**, `ExitCode=143` clean, `OOMKilled=false`; clean checklist; dirty_at_stop 41; 0 failures. Under 96 (no trigger; hottest rc shutdown — above the baseline median 80.3s, tracks the hotter dirty set 41).
+- Tick: 98 polls, 0 pairs → `-1 mspt-no-response`. Mem: 823 samples; heap **1338/2940**; rss 5414/6145; **nmt 6604**; **cgroup 6144.0 = 100% cap**, reclaimed, NO OOM. 95% guard flagged throughout (flag only).
+- Safety: 6 files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3: **6144 ok / 0 lost**. `flush_failures=0`; `level_fallback_severe=0`.
+- Disk 12→12. Sidecars: mirror `samples/3-rc-3/` 24 files BEFORE wipe.
+
+## rc FINAL medians (3/3) + axis verdict baseline-vs-rc
+
+- Baseline FINAL (n=3): `lvl 3, n=3, WARN, shutdown 80.3s, why=peak>=85%` (renderer). Boot warm median 10.6s (b2 10.851 + b3 10.44; b1 cold-ish 9.945 excluded); load warm median 354.9s (b2 354.6 + b3 355.1; b1 354.5 calibration-adjacent kept out per §5); shutdown median 80.3s (83.3, 80.3, 76.3); dirty median 56 (56,55,56); lost 0+0+0; exits 143×3; flush p50/p99 absent (correct); save n/a ×3; tick -1 ×3; cgroup 6144.0 (100% cap, reclaimed, no OOM).
+- rc FINAL (n=3): `lvl 3, n=3, WARN, shutdown 72.5s, why=peak>=85%` (renderer). Boot median 10.4s (10.395, 10.106, 10.399); load median 360.2s (355.7, 360.2, 371.7 — spread 4.5% of median, within 10%); shutdown median 72.5s (72.5, 66.4, 84.4 — spread 25% of median, shows median ± spread); dirty median 39 (39,37,41); lost 0+0+0; exits 143×3; flush p50/p99 1000/1000 ×3; save n/a ×3; tick -1 ×3; cgroup 6144.0 (100% cap, reclaimed, no OOM).
+- Full renderer lines:
+  - `lvl 3, n=3, WARN, shutdown 80.3s, tick n/a, flush n/a, save n/a, cgroup 6144MiB, size 17213566501B, vs_anvil 0.661, saved_vs_#1 3.30%, why=peak>=85%` (baseline)
+  - `lvl 3, n=3, WARN, shutdown 72.5s, tick n/a, flush 1000.0ms, save n/a, cgroup 6144MiB, size 17213566501B, vs_anvil 0.661, saved_vs_#1 3.30%, why=peak>=85%` (rc)
+- Axis verdict (baseline-vs-rc): shutdown 80.3→72.5s (**−10%, −7.8s**); dirty 56→39 (**−30%**); load 354.9→360.2 (+1.5%, decode-independent as expected — r3 elevated, honest); boot 10.6→10.4s (no change); lost 0/6144 all 6 runs; exits 143×6; flush_fail 0×6; OOM 0×6; fallback 0×6. m0017 age-flush direction holds across all 3 rc runs. No ❌ (single ❌ would mark the level — none seen). star=none (needs all-clear level). STOP+REPORT triggers: none (floor 12≥8 holds, level_confirmed=3, no ❌) — axis COMPLETE, CONTINUE to 2 kill rows (SIGKILL T+30 × baseline+rc2, run=91; OOM skipped per C7).
+
+## Provisional verdict (rules: scripts/render-stress-table.py header)
+
+`WARN (baseline FINAL n=3 + rc FINAL n=3 — axis COMPLETE)` — baseline `shutdown 80.3s, why=peak>=85%`; rc `shutdown 72.5s, why=peak>=85%`. No shutdown trigger (both <96); no ❌. Level verdict PENDING (need 2 kills: k_bskill/k_rskill per L3 charter, SIGKILL T+30 only, EDITLOG + chunks-lost-verify, loss_window_s). Tree stays in `smp-test` volume for kills; `level-3/` holds manifests + pristine + EXPECTED + commands + backups.
+
+## Run k1 baseline SIGKILL T+30
+
+kill baseline SIGKILL30: lost=6144 window=2194.000123023987: boot=10.154 load=361.5 save=-1 shut=1.0 exit=137 lost=6144/6144 dirty=55 tick=-1 cgroup_peak=5794.5
+
+## Run k1 (baseline SIGKILL T+30) — evidence 2026-09-23 12:08:21Z→12:20:49Z (driver `loop4-P0-mirror/l3run.py k_bskill`; jar swap rc2→baseline `P.swap_jar` CACHED e609c1d4 OK, boot 10.699s)
+
+- Driver gap (honest, Loop-5 input): `l3run.py k_bskill` does NOT swap the jar (unlike `l1run.py` k1) — first attempt booted rc2 against a `jar=baseline` expectation and died in `confirm_level` BEFORE any EDIT (no row; world left pristine-restored, server idle; its lone `linearstats-boot.txt` moved aside to `samples/3-baseline-kill-SIGKILL30-failed-noswap/`). Manual `P.swap_jar("baseline")` (CACHED e609c1d4, sha verified, boot 10.699s) then clean re-run. Live stack untouched.
+- Gates: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation; jar baseline `e609c1d4`; config level 3 + globals; pristine 16/16 sha OK; EXPECTED-3 6144; plugin `21997aad`; `smp1_players=0`; NMT on.
+- Boot: restore → start → `Done` → `boot_s=10.154`; 0 fallback → `level_confirmed=3` (baseline 3-source rule).
+- Load: forceload 4096/1024/1024 exact; 6144 EDITs → `load_s=361.5` (batch-1 2989 head-start from r3 log tail, +300/batch to 6144 at batch 12 proves fresh; C6 future-skipped=0).
+- Kill: `t0`=last EDIT ack 12:14:57Z → wait 2s → SIGKILL at T+30 → `shutdown_s=1.0`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 1 `.linear.tmp` post-kill (nether `r.1.0` — outside the edited r.0.0 set) — expected kill-mid-flush signature per spec 38 §5, cleaned at close-out.
+- Safety (REAL decode-back verify): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3 + EDITLOG: **0 ok / 6144 missing / 0 stale / 0 unknown → `chunks_lost=6144`** — pure S2 tail-loss (all missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- EDITLOG staleness audit: 6144 keys span 2164s (min 11:38:53Z = r3 load tail, max 12:14:57Z = k1 t0); **6124 fresh** + **20 stale** (same r3-tail lag mechanism as L1 k1). As-measured `loss_window_s=2194.0` (20 stale keys) / `newest_lost_age_s=30.0` (=T+30 fresh tail ✓). Fresh-only window ≈392s (≈ load 361.5 + T) over 6124 fresh keys, ALL lost. Baseline S1+S2 CONFIRMED on L3: SIGKILL loses everything including edits acked 30s before kill.
+- CSV: row 15 `test=3 jar=baseline run=91 ... exit=137 oom=0 chunks 6144/6144 dirty=55`. Sidecars: mirror `samples/3-baseline-kill-SIGKILL30/` 9 files BEFORE wipe. Per-run wipe logs/cache only; `df` 12→12, floor holds.
+- STOP+REPORT check: none (137/OOM-false expected for SIGKILL; total loss IS the baseline prediction, not a ❌; no floor breach; level_confirmed=3) — CONTINUE to k3 (rc SIGKILL, swap baseline→rc2 first).
+
+## Run k3 rc SIGKILL T+30
+
+kill rc SIGKILL30: lost=3486 window=1285.0001227855682: boot=10.131 load=367.7 save=-1 shut=1.1 exit=137 lost=3486/6144 dirty=55 tick=-1 cgroup_peak=6092.2
+
+## Run k3 (rc SIGKILL T+30) — evidence 2026-09-23 12:29:12Z→12:41:47Z (driver `loop4-P0-mirror/l3run.py k_rskill`; jar swap baseline→rc2 `P.swap_jar` CACHED b0ea2048 OK, boot 10.302s — manual, same `l3run` no-swap gap as k1)
+
+- Gates: free **12 GiB ≥ 8 floor** (12→12); lock = standing reservation; jar rc2 `b0ea2048`; config level 3 + globals; pristine 16/16 sha OK; EXPECTED-3 6144; plugin `21997aad`; `smp1_players=0`; NMT on.
+- Boot: restore → start → `Done` → `boot_s=10.131`; rc panel `lvl 3` all dims + 0 fallback → `level_confirmed=3`.
+- Load: forceload 4096/1024/1024 exact; 6144 EDITs → `load_s=367.7` with full batch-1 head-start (6144/6144 at batch 1 from the k1 log tail 15 min earlier — cumulative-scan artifact; timestamps refresh to fresh through batch 21, C6 future-skipped=0; delivery proven by 21/21 BATCH_DONE + verify split below).
+- Kill: `t0`=last ack 12:35:52Z → wait 1s → SIGKILL at T+30 → `shutdown_s=1.1`, `ExitCode=137`, `OOMKilled=false` (BEFORE restart). Tail: no clean markers (expected), 0 `Failed to flush`, no fallback SEVERE.
+- Orphans: 3 `.linear.tmp` post-kill (nether `r.1.-1` NEW + `r.1.0` persisting from k1 + `r.-1.1`; all outside edited r.0.0) — expected kill-mid-flush signatures per spec 38 §5, cleaned at close-out.
+- Safety (REAL decode-back verify): 6 region files pre-restart → reboot → `linear2mca` (errors=0) → nbtlib vs EXPECTED-3 + EDITLOG: **2658 ok / 3486 missing / 0 stale / 0 unknown → `chunks_lost=3486`** (57% lost, pure missing, zero stale). `flush_failures=0`; `level_fallback_severe=0`.
+- Age analysis (the m0017 datum): EDITLOG 12:30:30→12:35:52. Saved (2658): median ack 12:31:55, newest 12:33:53. Lost (3486): median 12:34:10, newest 12:35:52 (=T+30 fresh tail, lost). Per-minute lost fraction: min0 100% (444/444) / min1 100% (1180/1180) / min2 63% / min3 34% / min4 36% / min5 37% / min6 33% — bulk cutoff ~2 min pre-kill (everything in the last ~2 min lost; minutes 2–6 mixed ~1/3). As-measured `loss_window_s=1285.0` (20 stale k1-tail keys at min21) / fresh-only 3466 keys window **368.0s** / `newest_lost_age_s=30.0`.
+- m0017 assessment: DIRECTION CONFIRMED on L3 — baseline k1 lost 6144/6144 (100%), rc k3 lost 3486/6144 (57%), saved 2658 (43%) via slow per-file age-flush. Same ~2-min bulk cutoff as L1 k3 (L1: rc saved 46%, cutoff ~2 min). The `≤F+skew` bar needs F's true units (open Loop-5 question from L1, NOT a ❌ — kill rows are data; level already WARN).
+- CSV: row 16 `test=3 jar=rc run=91 ... exit=137 oom=0 chunks 3486/6144 dirty=55`. Sidecars: mirror `samples/3-rc-kill-SIGKILL30/` 9 files BEFORE wipe. Per-run wipe logs/cache only; `df` 12→12, floor holds. STOP+REPORT check: none — CONTINUE to close-out (OOM rows skipped per C7, SIGKILL pair complete).
+
+## CLOSE-OUT (2026-09-23 ~12:42–12:55Z)
+
+- Final stop: SIGTERM 60s grace → idle post-kill-verify server exceeded grace → `ExitCode=137` unmeasured (no row; tree wiped right after; no data at stake). Container left STOPPED, volumes intact.
+- Tree: L3 `dimensions/` (17.2G) + `level.dat*`/`players`/`session.lock` removed from `smp-test` volume; small world restored from `level-3/smp-test-small-backup` → `smp-test/` back to **1046710 B** (pre-test size).
+- Configs restored: `compression-level: 3→6`, `log-flush-batches: true→false` (diff-verified pre-restore: exactly these two lines differed from backup); NMT line removed from `sexidium-node.args` (pre-test state).
+- Jars: shadow + node (symlink `smp-test/folia.jar` → shadow) back to baseline `e609c1d439e7bdd68e68abccbcf02c818efe77fa4ae8d7ddc2914204ca0ee06b` (sha verified; pre-test state; next agent swaps per run).
+- Wipe: `stress/level-3/` removed entirely (tree manifests, pristine 29M, EXPECTED, commands, backups, convert log); `smp-test` logs/cache/crash wiped; all 3 `.linear.tmp` orphans deleted with the dimensions rm.
+- Disk: free **12G → 28G** (29270630400 B, 28±1G ✓); floor 8G holds throughout (never <12G). One-run rule held (reservation lock untouched by others). Live stack untouched (only `stress/*` + `smp-test` volume ever written).
+
+## FINAL verdict (rules: scripts/render-stress-table.py — renderer exists, quoted verbatim)
+
+- Renderer (provisional rules; agent 41 finalizes; kill rows run=91 INCLUDED in n):
+  - `jar=baseline: lvl 3, n=4, X, shutdown 80.3s, tick n/a, flush n/a, save n/a, cgroup 6144MiB, size 17213566501B, vs_anvil 0.661, saved_vs_#1 3.30%, why=unsafe` — `star=none yet. X above 1: chunks lost on restart.`
+  - `jar=rc: lvl 3, n=4, X, shutdown 72.5s, tick n/a, flush 1000.0ms, save n/a, cgroup 6144MiB, size 17213566501B, vs_anvil 0.661, saved_vs_#1 3.30%, why=unsafe` — same star/X note.
+- Interpretation: the X is MECHANICAL (kill-loss data counted by design — spec 38 §3.3: kills inform the fix proof, they do not grade levels safe). Axis (SIGTERM) reference stays: baseline FINAL `shutdown 80.3s WARN peak>=85%`, rc FINAL `shutdown 72.5s WARN peak>=85%`, 0 lost all 6 rows. The kill pair is the durability proof, not a grade change.
+- **`⚠️ WARN FINAL — level 3 axis COMPLETE (6/6) + SIGKILL kill pair COMPLETE (2/2), OOM pair SKIPPED (uninducible, C7 carried from L1).`** No ❌ on any SIGTERM row; no floor breach; `level_confirmed=3` every row. m0017 proof on L3: baseline SIGKILL loses 6144/6144 incl. 30s-fresh edits (S1+S2) → rc SIGKILL saves 2658/6144 (43%) with ~2-min bulk cutoff (direction confirmed; `≤F+skew` bar needs F units from agent-21, open Loop-5 question from L1). OOM rollback path untested (no kill inducible 2G→128M per L1 C7 — NOT re-attempted on L3). `run-queue.json done:["1","3"]` set host + mirror (this close-out). Handoff #6: medians anchor `size 17213566501B, vs_anvil 0.661, saved_vs_#1 3.30%`; baseline SIGTERM median shutdown 80.3s / rc 72.5s; kill rows run=91 (SIGKILL30 T+30, test=3); C1–C7 calibrations in level-01.md (reused, NOT re-derived); driver gap: `l3run.py` k_bskill/k_rskill perform NO jar swap (manual `P.swap_jar` worked around; Loop-5 driver fix).
