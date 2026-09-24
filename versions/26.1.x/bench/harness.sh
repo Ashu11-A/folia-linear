@@ -47,8 +47,8 @@ CONVERTER="$SEXIDIUM_REPO/scripts/vendor/mca2linear-convert.py"
 
 JAR_BASELINE_URL="https://github.com/Ashu11-A/folia-linear/releases/download/v1.0.0-baseline/folia-linear-26.1.2-1.0.0-baseline.jar"
 JAR_BASELINE_SHA="e609c1d439e7bdd68e68abccbcf02c818efe77fa4ae8d7ddc2914204ca0ee06b"
-JAR_RC_URL="https://github.com/Ashu11-A/folia-linear/releases/download/v1.1.0-rc/folia-linear-26.1.2-1.1.0-rc.jar"
-JAR_RC_SHA="b184a5b6f49f8e0f0d1ddef4b679da9f792f5f79feca0c401df6d5993343d84f"
+JAR_RC_URL="https://github.com/Ashu11-A/folia-linear/releases/download/v1.1.0-rc2/folia-linear-26.1.2-1.1.0-rc2.jar"
+JAR_RC_SHA="b0ea20484d85e4adce697cb786bf164b6fa4865d9eb122b8c931910e2723e1d6"
 SHADOW_JAR="/srv/nodes/smp-test/shadow-server/folia.jar"   # inside smp-test volume
 NODE="smp-test"
 CONTAINER="sexidium-smp-test"
@@ -61,8 +61,10 @@ on_host() { "$REMOTE" exec "$1" -- sh -c "$2"; }
 
 # --- step 0: preconditions ----------------------------------------------------
 harness::lock() {
-  # Local operator-side lock: one harness process at a time (Plan.md: one run).
-  exec 9>/tmp/harness.lock
+  # Persistent-state lock: one harness process at a time (Plan.md: one run).
+  # Lives under $STRESS (persistent scratch), NOT /tmp (ledger-grade state
+  # must survive reboots and stay out of ephemeral dirs — S3 setup 2026-09-22).
+  exec 9>"$STRESS/harness.lock"
   flock -n 9 || harness::die "another harness holds the lock; one run at a time"
 }
 harness::preflight() {
