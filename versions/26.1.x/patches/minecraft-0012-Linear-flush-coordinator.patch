@@ -341,7 +341,7 @@ index 0d5c55b..c1bf0b4 100644
              }
          }
          // Linear: markDirty count outside sync (lock-free).
-@@ -142,23 +346,152 @@ public final class LinearFlushCoordinator {
+@@ -142,23 +346,138 @@ public final class LinearFlushCoordinator {
          if (eldest != null) {
              this.flushOne(eldest);
          }
@@ -362,18 +362,7 @@ index 0d5c55b..c1bf0b4 100644
 +     * flushed; younger files stay tracked for the next save. {@code force}
 +     * (evict/unload) flushes everything regardless of age.
 +     */
-+    void flushDirty(boolean force) {
-+        // Linear - gate: coalesce per-tick non-force drains to the flush-frequency window.
-+        // Linear - force bypasses unconditionally (shutdown/close durability).
-+        final long gateNow;
-+        if (!force) {
-+            gateNow = System.nanoTime();
-+            if (gateNow - LAST_NON_FORCE_DRAIN_NANOS < linear$cachedFlushFrequencyNanos()) {
-+                return;
-+            }
-+        } else {
-+            gateNow = 0L;
-+        }
++         void flushDirty(boolean force) {
          if (this.isEmpty()) {
              return;
          }
@@ -485,9 +474,6 @@ index 0d5c55b..c1bf0b4 100644
 +                Thread.currentThread().interrupt();
 +            }
 +        } finally {
-+            if (!force) {
-+                LAST_NON_FORCE_DRAIN_NANOS = gateNow;
-+            }
 +            final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
 +            try {
 +                io.papermc.paper.linear.LinearFlushBridge.notifyFlushSync(

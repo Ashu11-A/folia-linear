@@ -3,14 +3,14 @@ From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 22:39:37 -0300
 Subject: [PATCH] Linear save drain
 
-Wire deferred linear durability into the server save, autosave and shutdown paths (finding F fix). Vanilla RegionFileStorage instances are never flushed or closed by the Folia/Moonrise runtime, so the coordinator dirty set previously drained only via bound pressure: fresh worlds persisted nothing on clean stop. ServerChunkCache.save drains every tracked folder (forced iff flushStorage, age-gated otherwise); periodic autosave drains age-eligible files (autosave-driven, not per-tick); MinecraftServer.saveAllChunks with close=true force-drains via evictAll; ServerLevel.close evictAll as backup; RegionShutdownThread.run evictAll right after stopServer, while regions are populated (the per-region save path observes zero regions post-halt). New LinearFlushCoordinator.flushAllDirty(force)/evictAll, per-folder failures logged never thrown. No behavior change for explicit-ANVIL worlds (no linear folders tracked).
+Wire deferred linear durability into the server save, autosave and shutdown paths (finding F fix). Vanilla RegionFileStorage instances are never flushed or closed by the Folia/Moonrise runtime, so the coordinator dirty set previously drained only via bound pressure: fresh worlds persisted nothing on clean stop. ServerChunkCache.save drains every tracked folder (forced iff flushStorage, age-gated otherwise); periodic autosave drains age-eligible files (autosave-driven, not per-tick); MinecraftServer.saveAllChunks with close=true force-drains via evictAll; ServerLevel.close evictAll as backup; RegionShutdownThread.run evictAll right after stopServer, while regions are populated (the per-region save path observes zero regions post-halt). New LinearFlushCoordinator.flushAllDirty(force)/evictAll, per-folder failures logged never thrown. flushAllDirty(false) is further gated to one pass per flush-frequency window so per-tick callers cannot recompress whole regions every tick; force bypasses (shutdown durability). No behavior change for explicit-ANVIL worlds (no linear folders tracked).
 ---
  .../threadedregions/RegionShutdownThread.java |  5 +++
- net/linear/LinearFlushCoordinator.java        | 40 +++++++++++++++++++
+ net/linear/LinearFlushCoordinator.java        | 63 +++++++++++++++++++
  net/minecraft/server/MinecraftServer.java     |  8 ++++
  .../server/level/ServerChunkCache.java        |  3 ++
  net/minecraft/server/level/ServerLevel.java   |  8 ++++
- 5 files changed, 64 insertions(+)
+ 5 files changed, 87 insertions(+)
 
 diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
 index f2208bc..c0cce95 100644
@@ -32,7 +32,7 @@ diff --git a/net/linear/LinearFlushCoordinator.java b/net/linear/LinearFlushCoor
 index c1bf0b4..754060d 100644
 --- a/net/linear/LinearFlushCoordinator.java
 +++ b/net/linear/LinearFlushCoordinator.java
-@@ -104,6 +104,46 @@ public final class LinearFlushCoordinator {
+@@ -104,6 +104,68 @@ public final class LinearFlushCoordinator {
          }
      }
  
@@ -44,6 +44,25 @@ index c1bf0b4..754060d 100644
 +     * logged, never thrown: a save must not die on one bad folder.
 +     */
 +    public static void flushAllDirty(boolean force) {
++        // Linear - gate: coalesce frequent non-force drains to one pass per
++        // flush-frequency window (per-tick unload/autosave callers). Force
++        // bypasses unconditionally (shutdown/close durability). One check per
++        // pass here (not per folder) so every tracked folder drains together.
++        // Fresh resolve (not the 5s markDirty cache): a stale interval would
++        // wrongly suppress drains after config/test frequency changes.
++        final long gateNow;
++        if (!force) {
++            gateNow = System.nanoTime();
++            long seconds = linear$resolveFlushFrequencySeconds();
++            if (seconds < 0L) {
++                seconds = 10L;
++            }
++            if (gateNow - LAST_NON_FORCE_DRAIN_NANOS < seconds * 1_000_000_000L) {
++                return;
++            }
++        } else {
++            gateNow = 0L;
++        }
 +        for (String folderKey : new ArrayList<>(BY_FOLDER.keySet())) {
 +            try {
 +                LinearFlushCoordinator coordinator = BY_FOLDER.get(folderKey);
@@ -53,6 +72,9 @@ index c1bf0b4..754060d 100644
 +            } catch (RuntimeException e) {
 +                LOGGER.error("Failed to flush linear folder {}", folderKey, e);
 +            }
++        }
++        if (!force) {
++            LAST_NON_FORCE_DRAIN_NANOS = gateNow;
 +        }
 +    }
 +
