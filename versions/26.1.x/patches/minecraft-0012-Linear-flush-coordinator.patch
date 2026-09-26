@@ -90,7 +90,7 @@ index 0d5c55b..c1bf0b4 100644
   * Polling uses the region-file contract ({@code isMarkedToSave()} leaves
   * the flag set; the flag is cleared only after a successful flush).</p>
   */
-@@ -55,6 +74,18 @@ public final class LinearFlushCoordinator {
+@@ -55,6 +74,20 @@ public final class LinearFlushCoordinator {
  
      private static final ConcurrentHashMap<String, LinearFlushCoordinator> BY_FOLDER = new ConcurrentHashMap<>();
  
@@ -105,6 +105,8 @@ index 0d5c55b..c1bf0b4 100644
 +    private static int FLUSH_POOL_THREADS = 0;
 +    // Test-only override (null = read GlobalConfiguration).
 +    private static volatile Integer FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
++    // Linear - gate: last completed non-force drain (System.nanoTime); 0 = none yet.
++    private static volatile long LAST_NON_FORCE_DRAIN_NANOS = 0L;
 +
      /** Per-folder singleton; creates on first use for a storage folder. */
      public static LinearFlushCoordinator forFolder(Path folder) {
@@ -123,7 +125,7 @@ index 0d5c55b..c1bf0b4 100644
              coordinator.recordEvict(); // Linear: evict count (lock-free)
          }
      }
-@@ -76,9 +108,150 @@ public final class LinearFlushCoordinator {
+@@ -76,9 +108,161 @@ public final class LinearFlushCoordinator {
          return folder.toAbsolutePath().normalize().toString();
      }
  
@@ -167,6 +169,17 @@ index 0d5c55b..c1bf0b4 100644
 +        FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
 +        CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = 10_000_000_000L;
 +        CACHED_FLUSH_FREQUENCY_AT_NANOS = 0L;
++        LAST_NON_FORCE_DRAIN_NANOS = 0L;
++    }
++
++    /** Test-only: clears the drain-gate timestamp (global isolation). */
++    static void linear$resetDrainGateForTests() {
++        LAST_NON_FORCE_DRAIN_NANOS = 0L;
++    }
++
++    /** Test-only: returns the last completed non-force drain timestamp nanos. */
++    static long linear$lastNonForceDrainNanosForTests() {
++        return LAST_NON_FORCE_DRAIN_NANOS;
 +    }
 +
 +    /**
@@ -328,7 +341,7 @@ index 0d5c55b..c1bf0b4 100644
              }
          }
          // Linear: markDirty count outside sync (lock-free).
-@@ -142,23 +346,138 @@ public final class LinearFlushCoordinator {
+@@ -142,23 +346,152 @@ public final class LinearFlushCoordinator {
          if (eldest != null) {
              this.flushOne(eldest);
          }
@@ -350,6 +363,17 @@ index 0d5c55b..c1bf0b4 100644
 +     * (evict/unload) flushes everything regardless of age.
 +     */
 +    void flushDirty(boolean force) {
++        // Linear - gate: coalesce per-tick non-force drains to the flush-frequency window.
++        // Linear - force bypasses unconditionally (shutdown/close durability).
++        final long gateNow;
++        if (!force) {
++            gateNow = System.nanoTime();
++            if (gateNow - LAST_NON_FORCE_DRAIN_NANOS < linear$cachedFlushFrequencyNanos()) {
++                return;
++            }
++        } else {
++            gateNow = 0L;
++        }
          if (this.isEmpty()) {
              return;
          }
@@ -461,6 +485,9 @@ index 0d5c55b..c1bf0b4 100644
 +                Thread.currentThread().interrupt();
 +            }
 +        } finally {
++            if (!force) {
++                LAST_NON_FORCE_DRAIN_NANOS = gateNow;
++            }
 +            final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
 +            try {
 +                io.papermc.paper.linear.LinearFlushBridge.notifyFlushSync(

@@ -3,15 +3,14 @@ From: folia-linear-ci <30575805+Ashu11-A@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 22:39:37 -0300
 Subject: [PATCH] Linear save drain
 
-Wire deferred linear durability into the server save, autosave and shutdown paths (finding F fix). Vanilla RegionFileStorage instances are never flushed or closed by the Folia/Moonrise runtime, so the coordinator dirty set previously drained only via bound pressure: fresh worlds persisted nothing on clean stop. ServerChunkCache.save drains every tracked folder (forced iff flushStorage, age-gated otherwise); ChunkMap.processUnloads drains age-eligible files every unload pass; MinecraftServer.saveAllChunks with close=true force-drains via evictAll; ServerLevel.close evictAll as backup; RegionShutdownThread.run evictAll right after stopServer, while regions are populated (the per-region save path observes zero regions post-halt). New LinearFlushCoordinator.flushAllDirty(force)/evictAll, per-folder failures logged never thrown. No behavior change for explicit-ANVIL worlds (no linear folders tracked).
+Wire deferred linear durability into the server save, autosave and shutdown paths (finding F fix). Vanilla RegionFileStorage instances are never flushed or closed by the Folia/Moonrise runtime, so the coordinator dirty set previously drained only via bound pressure: fresh worlds persisted nothing on clean stop. ServerChunkCache.save drains every tracked folder (forced iff flushStorage, age-gated otherwise); periodic autosave drains age-eligible files (autosave-driven, not per-tick); MinecraftServer.saveAllChunks with close=true force-drains via evictAll; ServerLevel.close evictAll as backup; RegionShutdownThread.run evictAll right after stopServer, while regions are populated (the per-region save path observes zero regions post-halt). New LinearFlushCoordinator.flushAllDirty(force)/evictAll, per-folder failures logged never thrown. No behavior change for explicit-ANVIL worlds (no linear folders tracked).
 ---
  .../threadedregions/RegionShutdownThread.java |  5 +++
  net/linear/LinearFlushCoordinator.java        | 40 +++++++++++++++++++
  net/minecraft/server/MinecraftServer.java     |  8 ++++
- net/minecraft/server/level/ChunkMap.java      |  5 +++
  .../server/level/ServerChunkCache.java        |  3 ++
  net/minecraft/server/level/ServerLevel.java   |  8 ++++
- 6 files changed, 69 insertions(+)
+ 5 files changed, 64 insertions(+)
 
 diff --git a/io/papermc/paper/threadedregions/RegionShutdownThread.java b/io/papermc/paper/threadedregions/RegionShutdownThread.java
 index f2208bc..c0cce95 100644
@@ -99,22 +98,6 @@ index 8ec86d7..be8a7d8 100644
  
          // Paper - move to saveGlobalData()
  
-diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
-index 3b42072..efe33a0 100644
---- a/net/minecraft/server/level/ChunkMap.java
-+++ b/net/minecraft/server/level/ChunkMap.java
-@@ -432,6 +432,11 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
-     private void processUnloads(final BooleanSupplier haveTime) {
-         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.processUnloads(); // Paper - rewrite chunk system
-         ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler().chunkHolderManager.autoSave(); // Paper - rewrite chunk system
-+        // Linear - autosave drain (finding F fix): Moonrise unload/autosave marks
-+        // linear files dirty but nothing flushes them (vanilla save paths are
-+        // bypassed). Drain age-eligible files every unload pass: age-gated, cheap
-+        // no-op when young/clean; per-folder failures logged, never thrown.
-+        net.linear.LinearFlushCoordinator.flushAllDirty(false);
-     }
- 
-     private void saveChunksEagerly(final BooleanSupplier haveTime) {
 diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
 index a733159..338af96 100644
 --- a/net/minecraft/server/level/ServerChunkCache.java

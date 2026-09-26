@@ -88,6 +88,17 @@ The world boots, but not as intended. Fix the YAML.
 Field meanings, the flush event contract and troubleshooting are in
 [../docs/observability.md](../docs/observability.md).
 
+### 3e. Gated flush drain
+
+- Non-force flush drains run at most once per `flush-frequency` window
+  (default 10s); drain requests inside the window are skipped.
+- The per-tick unload drain in `ChunkMap.processUnloads` is removed, so
+  unload passes no longer block on a full flush sweep.
+- Autosave (`saveIncrementally`), explicit save (`ServerChunkCache.save` /
+  `saveAllChunks`), and shutdown/close (`evictAll`) drains are unchanged.
+- Forced drains bypass the gate. Clean shutdown still flushes all dirty
+  files, preserving zero data loss on orderly stop.
+
 ## 4. Known limitations
 
 Do not represent these as covered.
