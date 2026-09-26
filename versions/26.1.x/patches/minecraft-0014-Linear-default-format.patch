@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: folia-linear-build <folia-linear-build@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 15:56:16 -0300
-Subject: [PATCH] Linear default format 9
+Subject: [PATCH] Linear default format 6
 
 ---
  .../io/datacontroller/EntityDataController.java           | 2 +-
@@ -22,7 +22,7 @@ index e018040..798f3e6 100644
          public EntityRegionFileStorage(final RegionStorageInfo regionStorageInfo, final Path directory,
                                         final boolean dsync) {
 -            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
-+            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.LINEAR, 9); // Linear - default preserves the configured default (LINEAR, 9)
++            this(regionStorageInfo, directory, dsync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
          }
  
          // Linear - format-aware entry point. The outer EntityDataController
@@ -35,7 +35,7 @@ index 8681460..8c231ed 100644
  
      /** Fallback compression when the configured level is out of range. */
 -    public static final int DEFAULT_COMPRESSION_LEVEL = 1;
-+    public static final int DEFAULT_COMPRESSION_LEVEL = 9;
++    public static final int DEFAULT_COMPRESSION_LEVEL = 6;
      /** Inclusive upper bound (matches Kaiiju 0003 range 1..22). */
      public static final int MAX_COMPRESSION_LEVEL = 22;
  
@@ -61,7 +61,7 @@ index 4d1eb7f..fab9427 100644
  
      protected IOWorker(final RegionStorageInfo info, final Path dir, final boolean sync) {
 -        this(info, dir, sync, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
-+        this(info, dir, sync, net.linear.RegionFileFormat.LINEAR, 9); // Linear - default preserves the configured default (LINEAR, 9)
++        this(info, dir, sync, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
      }
  
      // Linear - format-aware entry point (called by the SimpleRegionStorage overload).
@@ -74,7 +74,7 @@ index f84175c..dfb7f6f 100644
          final DataFixTypes dataFixType
      ) {
 -        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
-+        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 9); // Linear - default preserves the configured default (LINEAR, 9)
++        this(readInfo, readFolder, writeInfo, writeFolder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
      }
  
      // Linear - format-aware entry point for --recreate. The write side
@@ -95,7 +95,7 @@ index 797b594..66eddc0 100644
      private final boolean sync;
 -    // Linear - per-storage output format. Defaults to ANVIL
 -    // so every pre-existing construction site keeps vanilla behavior until configured.
-+    // Linear - per-storage output format. Defaults to LINEAR at level 9
++    // Linear - per-storage output format. Defaults to LINEAR at level 6
 +    // (the configured default); explicit-ANVIL worlds keep working via dual-read.
      // Linear - added linearCrashOnBrokenSymlink (world key
      // region-format.linear.crash-on-broken-symlink, default true) for the guard.
@@ -105,7 +105,7 @@ index 797b594..66eddc0 100644
  
      protected RegionFileStorage(final RegionStorageInfo info, final Path folder, final boolean sync) { // Paper - protected
 -        this(info, folder, sync, RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
-+        this(info, folder, sync, RegionFileFormat.LINEAR, 9); // Linear - default preserves the configured default (LINEAR, 9)
++        this(info, folder, sync, RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
      }
  
      // Linear - format-aware entry point. RegionStorageInfo is deliberately
@@ -127,7 +127,7 @@ index 13e9c03..ad67755 100644
          final RegionStorageInfo info, final Path folder, final DataFixer fixerUpper, final boolean syncWrites, final DataFixTypes dataFixType
      ) {
 -        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.ANVIL, 1); // Linear - default preserves vanilla behavior
-+        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 9); // Linear - default preserves the configured default (LINEAR, 9)
++        this(info, folder, fixerUpper, syncWrites, dataFixType, net.linear.RegionFileFormat.LINEAR, 6); // Linear - default preserves the configured default (LINEAR, 6)
      }
  
      // Linear - format-aware entry point. ChunkMap/PoiManager thread the world

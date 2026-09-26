@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: folia-linear-build <folia-linear-build@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 15:56:19 -0300
-Subject: [PATCH] Linear default format 9
+Subject: [PATCH] Linear default format
 
 ---
  .../configuration/WorldConfiguration.java     |  12 +-
@@ -27,10 +27,10 @@ index 29a32b85e..af9ead0cc 100644
  
          public class Linear extends ConfigurationPart {
 -            @Comment("ZSTD compression level for Linear files (1-22). Default 1. Out-of-range values log SEVERE and fall back to 1. NOTE: Kaiiju's message said 1-22 but its check was `> 23`; the correct max is 22 (zstd-jni 1.5.4-1).")
-+            @Comment("ZSTD compression level for Linear files (1-22). Default 9. Out-of-range values log SEVERE and fall back to 9. NOTE: Kaiiju's message said 1-22 but its check was `> 23`; the correct max is 22 (zstd-jni 1.5.4-1).")
++            @Comment("ZSTD compression level for Linear files (1-22). Default 6. Out-of-range values log SEVERE and fall back to 6. NOTE: Kaiiju's message said 1-22 but its check was `> 23`; the correct max is 22 (zstd-jni 1.5.4-1).")
              @Setting("compression-level")
 -            public int compressionLevel = 1;
-+            public int compressionLevel = 9;
++            public int compressionLevel = 6;
              @Comment("Crash the server if a .linear path is a broken symlink (default true). Prevents silent data loss when symlinked volumes go missing. Set false only if you accept warn-only behaviour. Guard body lives in RegionFileStorage (sibling A5-B2 + A4 dispatch).")
              @Setting("crash-on-broken-symlink")
              public boolean crashOnBrokenSymlink = true;
@@ -40,8 +40,8 @@ index 29a32b85e..af9ead0cc 100644
                  if (this.compressionLevel < 1 || this.compressionLevel > 22) {
 -                    LOGGER.error("[region-format] linear.compression-level must be 1-22, got {}. Falling back to 1.", this.compressionLevel);
 -                    this.compressionLevel = 1;
-+                    LOGGER.error("[region-format] linear.compression-level must be 1-22, got {}. Falling back to 9.", this.compressionLevel);
-+                    this.compressionLevel = 9;
++                    LOGGER.error("[region-format] linear.compression-level must be 1-22, got {}. Falling back to 6.", this.compressionLevel);
++                    this.compressionLevel = 6;
                  }
              }
          }
@@ -76,10 +76,10 @@ index 000000000..04165900f
 +
 +/**
 + * v1.1.1 default flip: region format ANVIL to LINEAR, linear compression
-+ * level 1 to 9.
++ * level 1 to 6.
 + *
 + * <p>NMS half pins the factory side ({@code DEFAULT_COMPRESSION_LEVEL},
-+ * clamp, header + payload round-trip at 9, {@code fromConfig} /
++ * clamp, header + payload round-trip at 6, {@code fromConfig} /
 + * {@code extensionFor} mappings). Paper half pins the config side
 + * ({@code WorldConfiguration} defaults, {@code @PostProcess} fallbacks,
 + * no {@code @Constraints} on the flipped keys).
@@ -113,21 +113,21 @@ index 000000000..04165900f
 +    // --- NMS: factory default level ---
 +
 +    @Test
-+    public void defaultCompressionLevelIsNine() {
-+        assertEquals(9, AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
-+            "DEFAULT_COMPRESSION_LEVEL must be 9 after the v1.1.1 flip");
++    public void defaultCompressionLevelIsSix() {
++        assertEquals(6, AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
++            "DEFAULT_COMPRESSION_LEVEL must be 6 after the v1.1.1 flip");
 +        assertEquals(22, AbstractRegionFileFactory.MAX_COMPRESSION_LEVEL,
 +            "MAX_COMPRESSION_LEVEL stays 22");
 +    }
 +
 +    @Test
-+    public void clampPassesNineAndFallsBackToNine() {
-+        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(9), "9 passes through");
++    public void clampPassesSixAndFallsBackToSix() {
++        assertEquals(6, AbstractRegionFileFactory.clampCompressionLevel(6), "6 passes through");
 +        assertEquals(1, AbstractRegionFileFactory.clampCompressionLevel(1), "1 still in range");
 +        assertEquals(22, AbstractRegionFileFactory.clampCompressionLevel(22), "22 still in range");
-+        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(0), "0 falls back to 9");
-+        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(23), "23 falls back to 9");
-+        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(-5), "negative falls back to 9");
++        assertEquals(6, AbstractRegionFileFactory.clampCompressionLevel(0), "0 falls back to 6");
++        assertEquals(6, AbstractRegionFileFactory.clampCompressionLevel(23), "23 falls back to 6");
++        assertEquals(6, AbstractRegionFileFactory.clampCompressionLevel(-5), "negative falls back to 6");
 +    }
 +
 +    // --- NMS: LinearRegionFile round-trip at the new default level ---
@@ -139,7 +139,7 @@ index 000000000..04165900f
 +    }
 +
 +    @Test
-+    public void levelNineHeaderAndPayloadRoundTrip() throws IOException {
++    public void levelSixHeaderAndPayloadRoundTrip() throws IOException {
 +        Path file = this.tempDir.resolve("r.0.0.linear");
 +        ChunkPos pos = new ChunkPos(3, 5);
 +        byte[] payload = new byte[1024];
@@ -147,19 +147,19 @@ index 000000000..04165900f
 +            payload[i] = (byte) ((i * 17 + 3) & 0xFF);
 +        }
 +
-+        LinearRegionFile region = new LinearRegionFile(file, 9);
++        LinearRegionFile region = new LinearRegionFile(file, 6);
 +        region.write(pos, ByteBuffer.wrap(payload));
 +        region.flush();
 +        assertTrue(Files.exists(file), "flush must materialise the file");
 +        assertTrue(Files.size(file) > 0, "flushed file must be non-empty");
-+        assertArrayEquals(payload, readAll(region, pos), "pre-close read at level 9");
++        assertArrayEquals(payload, readAll(region, pos), "pre-close read at level 6");
 +        region.close();
 +
 +        // Simulated restart: the level byte in the header is informational;
 +        // decoding is level-independent, so a fresh instance re-reads the payload.
-+        LinearRegionFile reopened = new LinearRegionFile(file, 9);
++        LinearRegionFile reopened = new LinearRegionFile(file, 6);
 +        try {
-+            assertArrayEquals(payload, readAll(reopened, pos), "restart re-read at level 9");
++            assertArrayEquals(payload, readAll(reopened, pos), "restart re-read at level 6");
 +            assertTrue(reopened.hasChunk(pos), "chunk present after reopen");
 +        } finally {
 +            reopened.close();
@@ -217,27 +217,27 @@ index 000000000..04165900f
 +    }
 +
 +    @Test
-+    public void paperDefaultsAreLinearNine() throws Exception {
++    public void paperDefaultsAreLinearSix() throws Exception {
 +        WorldConfiguration outer = newWorldConfig();
 +        WorldConfiguration.RegionFormat regionFormat = outer.new RegionFormat();
 +        WorldConfiguration.RegionFormat.Linear linear = regionFormat.new Linear();
 +        assertEquals(io.papermc.paper.configuration.type.RegionFileFormat.LINEAR, regionFormat.format, "format default is LINEAR");
-+        assertEquals(9, linear.compressionLevel, "compression-level default is 9");
++        assertEquals(6, linear.compressionLevel, "compression-level default is 6");
 +    }
 +
 +    @Test
-+    public void paperLinearPostProcessFallsBackToNine() throws Exception {
++    public void paperLinearPostProcessFallsBackToSix() throws Exception {
 +        WorldConfiguration outer = newWorldConfig();
 +        WorldConfiguration.RegionFormat.Linear linear = outer.new RegionFormat().new Linear();
 +        linear.compressionLevel = 0;
 +        runPostProcess(linear);
-+        assertEquals(9, linear.compressionLevel, "level 0 falls back to 9");
++        assertEquals(6, linear.compressionLevel, "level 0 falls back to 6");
 +        linear.compressionLevel = 23;
 +        runPostProcess(linear);
-+        assertEquals(9, linear.compressionLevel, "level 23 falls back to 9");
-+        linear.compressionLevel = 9;
++        assertEquals(6, linear.compressionLevel, "level 23 falls back to 6");
++        linear.compressionLevel = 6;
 +        runPostProcess(linear);
-+        assertEquals(9, linear.compressionLevel, "level 9 survives");
++        assertEquals(6, linear.compressionLevel, "level 6 survives");
 +    }
 +
 +    @Test

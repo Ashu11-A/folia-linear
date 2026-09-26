@@ -59,7 +59,7 @@ index 9732cca..a89632d 100644
 -                1
 +                // Linear - startup conversion level flow (B2; minecraft-0015).
 +                // Reference AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
-+                // never a literal, so B1's tuned default (minecraft-0014, level 9)
++                // never a literal, so B1's tuned default (minecraft-0014, level 6)
 +                // flows into the recreate write side. Ordering: this patch
 +                // applies AFTER B1's minecraft-0014. Value is 1 until B1 lands,
 +                // so behavior is unchanged without it.
@@ -122,7 +122,7 @@ index 9732cca..a89632d 100644
 +    // the level flows through AbstractRegionFileFactory.clampCompressionLevel
 +    // (single source of truth: never a literal and never a second inline range
 +    // check here), so out-of-range values fall back to
-+    // DEFAULT_COMPRESSION_LEVEL and B1's tuned default (level 9) reaches the
++    // DEFAULT_COMPRESSION_LEVEL and B1's tuned default (level 6) reaches the
 +    // startup conversion write side unchanged.
 +    //
 +    // B3 DEPENDENCY (cross-agent contract, signatures fixed): this method is a

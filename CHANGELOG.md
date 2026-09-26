@@ -3,6 +3,27 @@
 Tags are project versions (`v1.x.y`). Each release attaches one jar + `.sha256`
 per supported version line, named `folia-linear-<mcversion>-<project>.jar`.
 
+## v1.3.0 - 2026-09-26
+
+Async periodic flush drain (tick thread never blocks on file rewrites) and
+the shipped compression default drops from 9 to 6. Decided by a 9-run flush
+battery (gate vs async vs v1.2.0 baseline, 60 virtual players, 6 tick
+regions): async cut tick stalls 42→2 with zero flush-path stalls, while the
+gate alternative regressed. Full study: `docs/flush-battery.md`.
+
+- **Async drain:** periodic drains (`processUnloads`, autosave) submit to the
+  shared flush pool and return without joining; forced and stop drains
+  (`evictAll`, `flushAllDirty(true)`) keep the synchronous barrier and join
+  in-flight batches. Approved trade-off: a crash may lose up to one
+  `flush-frequency` window of writes; clean shutdown stays zero-loss.
+- **Default level 6:** `DEFAULT_COMPRESSION_LEVEL`, the config default and
+  the out-of-range fallback all move 9 → 6 (sweep: 42.9% smaller than Anvil,
+  tightest shutdown range). v1.2.0 entries below describe what shipped then;
+  they are historical and unchanged.
+- **Battery:** gate rejected (stalls 34/32/50, worst single run overall);
+  baseline control (42/36/26); async (2/2/2, all non-flush). Crash restarts
+  clean on all three; late-run TPS decay is generation-bound on every jar.
+
 ## v1.2.0 - 2026-09-26
 
 Patch consolidation, Linear-by-default, automatic startup conversion with a

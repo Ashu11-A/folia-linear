@@ -10,7 +10,7 @@ server does with a bad value.
 | Key | Config file | Scope | Type | Default |
 |---|---|---|---|---|
 | `region-format.format` | `paper-world.yml`, `paper-world-defaults.yml` | per world | `ANVIL` / `LINEAR` | `LINEAR` |
-| `region-format.linear.compression-level` | same | per world | int 1-22 | `9` |
+| `region-format.linear.compression-level` | same | per world | int 1-22 | `6` |
 | `region-format.linear.crash-on-broken-symlink` | same | per world | bool | `true` |
 | `region-format.linear.flush-frequency` | `paper-global.yml` | server | int >= 1 | `10` |
 | `region-format.linear.flush-max-threads` | `paper-global.yml` | server | int | `1` |
@@ -65,7 +65,7 @@ region-format:
 ```yaml
 region-format:
   linear:
-    compression-level: 9
+    compression-level: 6
 ```
 
 - zstd level used when a dirty region is flushed. Valid 1 to 22, matching
@@ -73,9 +73,9 @@ region-format:
 - Does not affect the in-memory hot path. Chunks are staged LZ4-compressed as
   they are written and only re-encoded with zstd at flush time.
 - Validated and clamped in three places, so a bad value cannot reach the codec:
-  - `@PostProcess` in `WorldConfiguration`: logs and resets to 9.
+  - `@PostProcess` in `WorldConfiguration`: logs and resets to 6.
   - `AbstractRegionFileFactory.clampCompressionLevel`: returns
-    `DEFAULT_COMPRESSION_LEVEL` (9) outside `1..MAX_COMPRESSION_LEVEL` (22).
+    `DEFAULT_COMPRESSION_LEVEL` (6) outside `1..MAX_COMPRESSION_LEVEL` (22).
   - The `LinearRegionFile` constructor: `Math.max(1, Math.min(22, level))`.
 - The level is recorded as one byte in the file header, but only for
   information. Decoding never reads it, so raising or lowering the setting needs
@@ -95,7 +95,7 @@ Measured effect on the live SMP tree, region files only, converted offline:
 
 Against the original Anvil size of 26,833,329,824 B that is 55.8% saved. The CPU
 side of the same run, and why level 6 stays the recommended starting point
-while level 9 is the shipped default, is in [benchmarks.md](benchmarks.md).
+while level 6 is the shipped default, is in [benchmarks.md](benchmarks.md).
 
 ## `linear.crash-on-broken-symlink`
 
@@ -179,7 +179,7 @@ Config problems, world still boots:
 | Line | Meaning |
 |---|---|
 | `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.` | `format:` misspelled or wrong case. The world is on Anvil despite the intent. |
-| `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 9.` | Level out of range, running at 9. |
+| `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 6.` | Level out of range, running at 6. |
 | `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.` | Frequency below 1. File stays tracked for the next save. |
 | `[region-format] linear.compression-workers must be >= 0, got <v>. Falling back to 0.` | Workers below 0, running serial. |
 | `[region-format] linear.long-distance-matching must be >= 0, got <v>. Falling back to 0.` | LDM below 0, LDM off. |

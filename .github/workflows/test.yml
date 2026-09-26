@@ -165,7 +165,7 @@ jobs:
             fi
             FMT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get('region-format', {}).get('format', ''))" "$f")
             # Single-file layout (post-consolidation): nested sections carry
-            # per-scope values -- world-defaults ships LINEAR/9 (the v1.2.0
+            # per-scope values -- world-defaults ships LINEAR/6 (the v1.2.0
             # default flip), per-world-example is the ANVIL opt-out template.
             if [ "$(basename "$f")" = "region-format.yml" ]; then
               WDFMT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['world-defaults']['region-format']['format'])" "$f")
@@ -175,9 +175,9 @@ jobs:
                 || { echo "::error::config-check: $f world-defaults format='$WDFMT' (want LINEAR)"; exit 1; }
               test "$PWFMT" = "ANVIL" \
                 || { echo "::error::config-check: $f per-world-example format='$PWFMT' (want ANVIL)"; exit 1; }
-              test "$WDLVL" = "9" \
-                || { echo "::error::config-check: $f world-defaults compression-level='$WDLVL' (want 9)"; exit 1; }
-              echo "OK: $f (world-defaults=LINEAR/9, per-world-example=ANVIL)"
+              test "$WDLVL" = "6" \
+                || { echo "::error::config-check: $f world-defaults compression-level='$WDLVL' (want 6)"; exit 1; }
+              echo "OK: $f (world-defaults=LINEAR/6, per-world-example=ANVIL)"
             else
             # Per-scope format expectations (grounded in the release files):
             # per-world must opt in LINEAR, ship-defaults must stay ANVIL,

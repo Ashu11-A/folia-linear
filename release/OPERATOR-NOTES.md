@@ -12,8 +12,8 @@ verified backup within reach before touching any flag.
   deployment inside one process is the supported end state, not a degraded one.
 - The switch is per storage folder. Chunks and POI go through `ChunkMap`,
   entities through `EntityDataController`, and the dual-read probe covers both.
-- `compression-level` defaults to `9`. The keep-it-at-1 soak gate is rescinded;
-  new worlds ship at 9, and changing it later is a config flip with no
+- `compression-level` defaults to `6`. The keep-it-at-1 soak gate is rescinded;
+   new worlds ship at 6, and changing it later is a config flip with no
   conversion needed.
 - `crash-on-broken-symlink` defaults to `true`. A broken `.linear` symlink halts
   the server by design, because continuing would regenerate chunks. Resolve
@@ -59,8 +59,8 @@ The world boots, but not as intended. Fix the YAML.
 - `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.`
   The `format:` value is misspelled or wrong case, for example lowercase
   `linear`. The world is on Anvil despite the intent.
-- `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 9.`
-  Out-of-range level, running at 9.
+- `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 6.`
+   Out-of-range level, running at 6.
 - `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.`
   Frequency below 1. File stays tracked for the next save, see section 4.
 

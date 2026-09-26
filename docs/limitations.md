@@ -9,7 +9,7 @@ What this release does not cover. Read it before a rollout, not after.
   p99, not on cold-start numbers: page-cache misses and zstd warmup make the
   first minutes look worse than steady state.
 - **Live flush cost at high compression levels.** Level 22 has clean boots and a
-  clean `save-all` behind it, but no long soak. Level 9 is the shipped default;
+  clean `save-all` behind it, but no long soak. Level 6 is the shipped default;
   multi-day soak cost above it is still unmeasured.
 - **Shutdown flush duration.** One paired sample showed Linear taking 1.8 s
   longer to shut down. Single sample, unconfirmed.
@@ -40,7 +40,7 @@ What this release does not cover. Read it before a rollout, not after.
   them (`flush-max-threads <= 1` stays serial, `compression-workers: 0` stays
   serial, LDM `0` stays off). Only `region-format.linear.log-flush-batches`
   is still a silent no-op (`false` = warn-only). New worlds ship `LINEAR` at
-  level 9. See [configuration.md](configuration.md).
+  level 6. See [configuration.md](configuration.md).
 
 ## Rollback
 

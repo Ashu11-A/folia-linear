@@ -15,7 +15,7 @@ sha256 below, and `rollback.sh` verifies it before acting.
 | `RELEASE.md` | This file: pins, install, dry-run results |
 | `rollback.sh` | Rung A (flag flip), rung B (convert back plus stock jar), rung FORWARD (re-opt-in), all behind preflight gates |
 | `OPERATOR-NOTES.md` | Posture, opt-out procedure, monitoring, limitations |
-| `region-format.yml` | Comment-free snippet covering all blocks: ship default `LINEAR` at level `9` with symlink guard on, per-world `ANVIL` opt-out override, and the global flush keys |
+| `region-format.yml` | Comment-free snippet covering all blocks: ship default `LINEAR` at level `6` with symlink guard on, per-world `ANVIL` opt-out override, and the global flush keys |
 
 Referenced but not included:
 
@@ -36,7 +36,7 @@ the 26.1.x instantiation of that file; the workflow pins mirror it.
 | Minecraft | `26.1.2` |
 | Java, build and runtime | `25` (verified on Temurin 25+36 LTS) |
 | zstd-jni | `1.5.6-8` |
-| Config defaults | `format: LINEAR`, `compression-level: 9`, `crash-on-broken-symlink: true`, `flush-frequency: 10`, `flush-max-threads: 1` |
+| Config defaults | `format: LINEAR`, `compression-level: 6`, `crash-on-broken-symlink: true`, `flush-frequency: 10`, `flush-max-threads: 1` |
 
 A v1.1.x-era local reference build produced a 60,509,601 B paperclip jar with
 sha256 `3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c`,
@@ -85,7 +85,7 @@ date -u +%FT%TZ > /backup/<world>/BACKUP_VERIFIED
 | Key | Default | Notes |
 |---|---|---|
 | `region-format.format` | `LINEAR` | Unknown string logs an error and falls back to `ANVIL` |
-| `region-format.linear.compression-level` | `9` | Outside 1-22 logs an error and falls back to `9`, clamped in three places |
+| `region-format.linear.compression-level` | `6` | Outside 1-22 logs an error and falls back to `6`, clamped in three places |
 | `region-format.linear.crash-on-broken-symlink` | `true` | A broken `.linear` symlink halts the server by design |
 | `region-format.linear.flush-frequency` | `10` | Age-based flush gate. Below 1 logs an error and falls back to `10` |
 | `region-format.linear.flush-max-threads` | `1` | Shared flush pool size; `<=1` keeps the serial loop |

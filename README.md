@@ -52,7 +52,7 @@ kills; tick p99 unmeasured.
 > period and was SIGKilled mid-flush, losing 2047 chunks.
 
 > **Recommended: compression level 6.** Tightest shutdown range of the sweep,
-> 42.9% smaller than Anvil, and nowhere near any cliff. Level 9 is the shipped
+> 42.9% smaller than Anvil, and nowhere near any cliff. Level 6 is the shipped
 > default.
 
 Under SIGKILL mid-write the fixed jar loses ~55% of edited chunks. Ungraceful
@@ -68,7 +68,7 @@ zstd compresses on flush.
 region-format:
   format: LINEAR            # LINEAR (default) or ANVIL; new writes only
   linear:
-    compression-level: 9    # 1-22; default 9, recommended 6, 12+ unsafe
+    compression-level: 6    # 1-22; default 6 (was 9 through v1.2.x); 12+ unsafe
     crash-on-broken-symlink: true
 ```
 

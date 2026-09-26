@@ -10,11 +10,11 @@ world-defaults:
   region-format:
     format: LINEAR
     linear:
-      compression-level: 9
+      compression-level: 6
       crash-on-broken-symlink: true
 per-world-example:
   region-format:
     format: ANVIL
     linear:
-      compression-level: 9
+      compression-level: 6
       crash-on-broken-symlink: true

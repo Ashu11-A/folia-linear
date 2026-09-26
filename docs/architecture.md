@@ -163,7 +163,7 @@ Applied in numeric order by paperweight, `minecraft-*` into
 | `minecraft-0011` | Flush-unlock: snapshot under monitor, I/O outside it |
 | `minecraft-0012` | Flush coordinator: shared pool, age-based flush, opportunistic drain, direct-into-image, bridge call site |
 | `minecraft-0013` | zstd tuning: workers, LDM, reader window |
-| `minecraft-0014` + `paper-0010` | Defaults flip: ANVIL/1 → LINEAR/9 |
+| `minecraft-0014` + `paper-0010` | Defaults flip: ANVIL/1 → LINEAR/9 through v1.2.x, LINEAR/6 from v1.3.0 |
 | `minecraft-0015` + `paper-0011` | Startup conversion trigger |
 | `minecraft-0016` | Conversion pipeline: convert → validate → delete |
 | `minecraft-0017` | Save drain: autosave, explicit-save and shutdown hooks |

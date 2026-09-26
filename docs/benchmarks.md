@@ -74,8 +74,7 @@ Cost:
   `save-all` flush, and a green `status`.
 - The live flush cost at level 22 over a long soak has not been measured. Watch
   the save wall and tick p99 before making 22 a default. Soak new worlds at
-  level 9 (the shipped default) or lower; level 6 stays the recommended
-  starting point.
+  level 6 (the shipped default).
 - Going back from 22 to 1 is a config flip. No rewrite is needed, because the
   header level byte is informational and decoding is level-independent.
 
