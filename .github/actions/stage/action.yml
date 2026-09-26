@@ -38,6 +38,9 @@ outputs:
   folia-dir:
     description: Echo of the folia-dir input (the staged Folia checkout path).
     value: ${{ inputs.folia-dir }}
+  version:
+    description: Resolved version folder (equals the version input, except 'all' resolves to the single versions/*/ entry).
+    value: ${{ steps.props.outputs.version }}
 
 runs:
   using: composite
@@ -78,6 +81,7 @@ runs:
           echo "branch=$(grep '^FOLIA_BRANCH=' "$PROPS" | cut -d= -f2-)"
           echo "ref=$FOLIA_REF"
           echo "mc=$(grep '^MC_VERSION=' "$PROPS" | cut -d= -f2-)"
+          echo "version=$VERSION"
         } >> "$GITHUB_OUTPUT"
 
     - name: Clone pinned Folia base
@@ -101,7 +105,7 @@ runs:
     - name: Stage Linear patches + tests
       shell: bash
       env:
-        VERSION: ${{ inputs.version }}
+        VERSION: ${{ steps.props.outputs.version }}
         SUPPLEMENT_DIR: ${{ inputs.supplement-dir }}
         FOLIA_DIR: ${{ inputs.folia-dir }}
         INCLUDE_TESTS: ${{ inputs.include-tests }}
