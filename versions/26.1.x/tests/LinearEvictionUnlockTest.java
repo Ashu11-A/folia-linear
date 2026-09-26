@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Minecraft-0014 (Loop 3, agent 28): eviction close outside the monitor.
+ * Minecraft-0011: eviction close outside the monitor.
  *
  * <p>NMS-light (TempDir + bootstrap, never halt()): writes more regions than
  * the 256-entry cache (GlobalConfiguration is null in tests, so cacheSize

@@ -1,25 +1,34 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: folia-linear-ci <folia-linear-ci@users.noreply.github.com>
-Date: Mon, 21 Sep 2026 19:47:42 -0300
-Subject: [PATCH] Linear zstd workers + LDM + reader long-max (minecraft-0018)
+From c5cf8a268e1ec0eb645387aabef68ac605e8d3ef Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:44:10 -0300
+Subject: [PATCH] Linear zstd tuning
 
-Loop-3 (agent 26): writer setWorkers(n)/setLong(w) + reader
-setLongMax(27). Reader ships WITH writer (reader-first for any future
-windowLog>27). BOTH default 0 = inert (serial, LDM off). Verified numbers
-from Loop-1 agent 10 (10-zstd-upstream.md): JNI caps setLong at windowLog
-27, decoder default accepts 27, MT@22 zero speedup + ~690MB native,
-LDM@L1 cheap. Setters before first write (IllegalStateException after).
-Native-memory caution in code + docs.
+Writer setWorkers(n)/setLong(windowLog) plus reader setLongMax(27)
+for the Linear zstd path. The reader ships with the writer
+(reader-first for any future windowLog above 27); it is a harmless
+no-op today since the decoder default already accepts 27 and the
+writer is capped at 27. Both writer knobs default to 0, which is
+inert (serial compression, long-distance matching off); out-of-range
+windowLog values are treated as off without calling the setter, and
+a null config resolves to 0. The setters must run before the first
+write of a fresh stream (one stream per flush, so per-flush setters
+are safe). Test-only static overrides select the values and a reset
+clears them. NATIVE-MEMORY CAUTION: workers at high compression
+levels reserve gigabytes of native memory for zero speedup; use
+workers only at low levels where jobs exist.
+---
+ net/linear/LinearRegionFile.java | 98 +++++++++++++++++++++++++++++++-
+ 1 file changed, 97 insertions(+), 1 deletion(-)
 
 diff --git a/net/linear/LinearRegionFile.java b/net/linear/LinearRegionFile.java
-index 5c570692d2b1f49969ea2deb3cc04a711b1e1bd5..0da7f6d52909f4c6069789a303a26c3710b88776 100644
+index 8ebdee6..73b13f3 100644
 --- a/net/linear/LinearRegionFile.java
 +++ b/net/linear/LinearRegionFile.java
 @@ -101,6 +101,11 @@ public final class LinearRegionFile implements AbstractRegionFile {
  
      private static final LZ4Factory LZ4 = LZ4Factory.fastestInstance();
  
-+    // Linear - minecraft-0018: zstd worker/LDM overrides for tests (null = read
++    // Linear: zstd worker/LDM overrides for tests (null = read
 +    // GlobalConfiguration). Both default 0 = inert (serial, LDM off).
 +    private static volatile Integer COMPRESSION_WORKERS_OVERRIDE_FOR_TESTS = null;
 +    private static volatile Integer LONG_DISTANCE_MATCHING_OVERRIDE_FOR_TESTS = null;
@@ -32,7 +41,7 @@ index 5c570692d2b1f49969ea2deb3cc04a711b1e1bd5..0da7f6d52909f4c6069789a303a26c37
      }
  
 +    /**
-+     * Linear - minecraft-0018: resolves zstd worker count from global
++     * Linear: resolves zstd worker count from global
 +     * {@code region-format.linear.compression-workers} (default 0 = serial).
 +     * Null config yields 0. Test override wins.
 +     */
@@ -54,7 +63,7 @@ index 5c570692d2b1f49969ea2deb3cc04a711b1e1bd5..0da7f6d52909f4c6069789a303a26c37
 +    }
 +
 +    /**
-+     * Linear - minecraft-0018: resolves LDM windowLog from global
++     * Linear: resolves LDM windowLog from global
 +     * {@code region-format.linear.long-distance-matching} (default 0 = off).
 +     * Valid 10..27; out-of-range yields 0 (off) without calling setLong
 +     * (JNI would silently disable anyway). Null config yields 0.
@@ -99,18 +108,18 @@ index 5c570692d2b1f49969ea2deb3cc04a711b1e1bd5..0da7f6d52909f4c6069789a303a26c37
                  final OutputStream fileOut = LinearDirectStreams.uncloseable(Channels.newOutputStream(channel));
                  try (ZstdOutputStream zstd = new ZstdOutputStream(fileOut, this.compressionLevel)) {
                      zstd.setChecksum(true);
-+                    // Linear - minecraft-0018: writer setWorkers/setLong, both
-+                    // default 0 = inert (serial, LDM off). MUST precede first
-+                    // write() or IllegalStateException (fresh stream per flush,
-+                    // so per-flush setters are safe). Verified numbers from
-+                    // Loop-1 agent 10 (docs/operations/folia-linear-loop6/
-+                    // 10-zstd-upstream.md): JNI caps setLong at windowLog 27,
-+                    // MT@22 zero speedup + ~690MB native, LDM@L1 cheap.
++                    // Linear: writer setWorkers/setLong, both default 0 =
++                    // inert (serial, LDM off). MUST precede first write() or
++                    // IllegalStateException (fresh stream per flush, so
++                    // per-flush setters are safe). JNI caps setLong at
++                    // windowLog 27; workers at high levels show zero speedup
++                    // for large native cost; LDM at low levels is cheap.
++                    // MT at level 22 has zero speedup and ~690MB native cost.
 +                    // NATIVE-MEMORY CAUTION: setWorkers(n) at high levels
 +                    // reserves GBs (level 22 + workers=2 is +3.2GB VSZ for zero
 +                    // gain, single 512MiB job); use workers only at low levels
 +                    // (level <= ~9 where jobs exist). Level 22 + flush threads
-+                    // >=4 OOMs a 6GiB container (see agent-10 OOM arithmetic).
++                    // >=4 can exhaust a 6GiB container.
 +                    final int zstdWorkers = linear$resolveCompressionWorkers();
 +                    if (zstdWorkers > 0) {
 +                        zstd.setWorkers(zstdWorkers);
@@ -129,15 +138,18 @@ index 5c570692d2b1f49969ea2deb3cc04a711b1e1bd5..0da7f6d52909f4c6069789a303a26c37
              }
  
 -            try (DataInputStream in = new DataInputStream(new ZstdInputStream(LinearDirectStreams.wrap(blob)))) {
-+            // Linear - minecraft-0018: reader setLongMax(27) ships WITH the
-+            // writer (reader-first for any future windowLog>27). Harmless
-+            // no-op today (decoder default already 27, setLong capped at 27
-+            // by JNI; LDM-27 frames decode with stock readers, proven by
-+            // agent 10). Set immediately after construction, before first
-+            // read(); only a setWindowLog(28..31) writer would need >27.
++            // Linear: reader setLongMax(27) ships WITH the writer
++            // (reader-first for any future windowLog>27). Harmless no-op
++            // today (decoder default already 27, setLong capped at 27 by
++            // JNI; LDM-27 frames decode with stock readers). Set immediately
++            // after construction, before first read(); only a
++            // setWindowLog(28..31) writer would need >27.
 +            final ZstdInputStream zstdIn = new ZstdInputStream(LinearDirectStreams.wrap(blob));
 +            zstdIn.setLongMax(27);
 +            try (DataInputStream in = new DataInputStream(zstdIn)) {
                  final int[] sizes = new int[SLOTS];
                  final int[] times = new int[SLOTS];
                  long totalRaw = 0L;
+-- 
+2.43.0
+

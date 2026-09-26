@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Minecraft-0013 (Loop 3, agent 22): flush batch outside the monitor.
+ * Minecraft-0011: flush batch outside the monitor.
  *
  * <p>NMS-light (TempDir + SharedConstants/Bootstrap, never halt()): exercises
  * {@code RegionFileStorage.flush()} and {@code close()} with LINEAR files via
@@ -44,7 +44,7 @@ public class LinearFlushUnlockTest {
 
     @AfterEach
     void resetCoordinator() {
-        // Minecraft-0017: age-based flush; storage.flush() test forces 0.
+        // Age-based flush (flush coordinator): storage.flush() test forces immediate age.
         LinearFlushCoordinator.linear$resetFlushPoolForTests();
     }
 
@@ -67,7 +67,7 @@ public class LinearFlushUnlockTest {
     public void storageFlushPersistsAndReopens() throws Exception {
         Path dir = this.tempDir.resolve("flushunlock");
         Files.createDirectories(dir);
-        // Minecraft-0017: force immediate age so storage.flush() drains.
+        // Force immediate age so storage.flush() drains.
         LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
         RegionFileStorage storage = newStorage(dir, 3);
         ChunkPos pos = new ChunkPos(0, 0);

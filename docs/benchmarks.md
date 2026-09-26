@@ -133,6 +133,9 @@ loss, reproduced 2/2. SIGKILL T+30 s loses ~100% of edited chunks pre-fix and
 could not be induced on the test workload. Levels 12 and above are not safe;
 level 6 is the recommended default.
 
+NOTE: v1.1.1 ships compression level 9 as the default; see
+[configuration.md](configuration.md).
+
 ## What is not measured
 
 - Tick p99 with players connected, on either format. All timing above is from

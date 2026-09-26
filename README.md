@@ -1,9 +1,10 @@
 # folia-linear
 
 Patch supplement that adds the [Linear region format](https://github.com/xymb-endcrystalme/LinearRegionFileFormatTools)
-to Folia 26.1.2. Worlds keep using Anvil (`.mca`) until you opt one in; when you
-do, its region, POI and entity files are written as `.linear` instead.
+to Folia 26.1.2. Worlds write Linear (`.linear`) region, POI and entity files
+by default; any world can be pinned back to Anvil (`.mca`) per world.
 
+![test](https://github.com/Ashu11-A/folia-linear/actions/workflows/test.yml/badge.svg)
 ![build](https://github.com/Ashu11-A/folia-linear/actions/workflows/build.yml/badge.svg)
 
 - Anvil compresses every chunk on its own with zlib, then pads each one up to a
@@ -93,14 +94,14 @@ on flush. Both live under `region-format` in the Paper config files.
 
 `region-format.format` accepts `ANVIL` or `LINEAR` and controls **new writes
 only** (reads try both extensions either way). Per world in
-`config/worlds/<world>/paper-world.yml`; server-wide default in
-`paper-world-defaults.yml`, shipped as `ANVIL`. Flipping back to `ANVIL` is
-safe at any time. Unknown values fall back to `ANVIL` with a
+`<world>/dimensions/minecraft/<dimension>/paper-world.yml`; server-wide default in
+`paper-world-defaults.yml`, shipped as `LINEAR`. Pinning a world back to
+`ANVIL` is safe at any time. Unknown values fall back to `ANVIL` with a
 `[region-format] Unknown region format` log line.
 
 `region-format.linear.compression-level` is the zstd level on flush, 1–22.
-**Default 1; recommended 6; 12 and above are not safe** (see above). Out-of-range
-values fall back to 1 with a log line. Changing it is a config flip, not a
+**Default 9; recommended 6; 12 and above are not safe** (see above). Out-of-range
+values fall back to 9 with a log line. Changing it is a config flip, not a
 migration: the header level byte is informational, decoding is
 level-independent, and files are rewritten at the new level as they are saved.
 
@@ -113,10 +114,11 @@ thread keeps the pre-pool serial loop; workers and LDM default to inert.
 `.linear` symlink instead of silently regenerating chunks.
 
 Full reference, including validation order and every log line:
-[docs/configuration.md](docs/configuration.md). Ready-to-paste snippets for all
-three files are in `release/`.
+[docs/configuration.md](docs/configuration.md). A ready-to-paste,
+comment-free snippet covering all three blocks is in
+`release/region-format.yml`.
 
-## Opting a world in
+## Opting a world out (LINEAR is the default)
 
 Short version. The full procedure, with the checks that matter, is in
 [release/OPERATOR-NOTES.md](release/OPERATOR-NOTES.md).
@@ -128,7 +130,7 @@ Short version. The full procedure, with the checks that matter, is in
    `find <world>/region <world>/poi <world>/entities -xtype l` must come back
    empty.
 3. Record a baseline with `du -sb region poi entities` and the `.mca` count.
-4. Set `region-format.format: LINEAR` (and `compression-level: 6`) in that one
+4. To pin a world back to Anvil, set `region-format.format: ANVIL` in that one
    world's `paper-world.yml`. Pick a low-traffic world first, never spawn,
    never all worlds at once.
 5. Restart, then soak through at least one full save cycle and one more restart.
@@ -181,12 +183,12 @@ Details in [docs/observability.md](docs/observability.md).
   previous folder (`scripts/new-version.sh`); porting checklist in
   [CONTRIBUTING.md](CONTRIBUTING.md).
 - `versions/26.1.x/patches/` - the fork itself, as paperweight feature patches.
-  Core (`minecraft-0009` region format, `0010` crash flags, `0011` recreate
-  support, `0012` timing, `0013` unlocked flush, `0014` eviction close,
-  `0015` measurement, `0016` shared flush pool, `0017`/`0020` age flush,
-  `0018` zstd workers/LDM, `0019` flush bridge) and config/command surface
-  (`paper-0008` keys, `0009` constraints, `0010` stats command, `0011` API
-  delegate, `0012` knob declarations, `0013` stats panel).
+  Core (`minecraft-0009` region format incl. crash flags + recreate support,
+  `0010` observability incl. measurement, `0011` unlocked flush incl. eviction
+  close, `0012` flush coordinator incl. shared pool + age flush + bridge,
+  `0013` zstd workers/LDM tuning) and config/command surface (`paper-0008`
+  config incl. constraints + knob declarations, `paper-0009` linearstats incl.
+  API delegate + stats panel). Module map: `patches/MODULES.md`.
 - `versions/26.1.x/tests/` - test sources copied into the fork's test tree.
 - `versions/26.1.x/bench/` - the stress harness, the per-run CSV and the
   per-level result docs from the compression sweep.
@@ -212,6 +214,8 @@ the rest of the workflow are in [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License and credits
 
 GPL-3.0, matching the Paper/Folia/Kaiiju lineage.
+
+Full text: [LICENSE](LICENSE).
 
 - [LinearRegionFileFormatTools](https://github.com/xymb-endcrystalme/LinearRegionFileFormatTools)
   and [LinearPaper](https://github.com/xymb-endcrystalme/LinearPaper) for the

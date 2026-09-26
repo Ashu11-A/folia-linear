@@ -1,23 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: folia-linear <folia-linear@users.noreply.github.com>
-Date: Sat, 19 Sep 2026 00:00:00 +0000
-Subject: [PATCH] Linear config + dual-read tests (A7 + A5)
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Linear region config
 
-Loop-2 integration (SUM): Paper-config side of the Linear port.
-Sources: A7 0001 (global flush keys; NOTE the wave-2 file was truncated
-mid-hunk, so the GlobalConfiguration section below is the SUM-completed
-form actually applied to the tree) + A7 0002 (world format keys, applied
-verbatim: RegionFileFormat import + RegionFormat block) + A5's 3 test
-files (RegionStorageUpgraderScanTest with the SUM alternation-order fix).
-A4 call sites read level.paperConfig().regionFormat.* (NMS 0010).
-Global flush keys are inert in Loop-2 (LinearFlushCoordinator is
-threadless per A2 rules; pool wiring is a Loop-3 item).
+Paper-side Linear region configuration: global flush keys plus a
+per-world format selector; reads probe both extensions so flipping the
+format never hides existing data. Global flush keys are inert and
+threadless in this release (no pool wiring yet).
 
+---
 diff --git a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
-index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..ff082250a46a545be79d7af17f4ec085d3bcdf7e 100644
+index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..00f5db8bfbfb5c2bbbbc2ba50e416c8c133217f0 100644
 --- a/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
 +++ b/src/main/java/io/papermc/paper/configuration/GlobalConfiguration.java
-@@ -343,6 +343,36 @@ public class GlobalConfiguration extends ConfigurationPart {
+@@ -343,6 +343,51 @@ public class GlobalConfiguration extends ConfigurationPart {
          public IntOr.Disabled maxTrackingCombatEntries = new IntOr.Disabled(OptionalInt.of(10240));
      }
  
@@ -29,11 +25,16 @@ index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..ff082250a46a545be79d7af17f4ec085
 +        public Linear linear;
 +
 +        public class Linear extends ConfigurationPart {
-+            @Comment("How often (in seconds) buffered Linear region data is flushed to disk. Mirrors Kaiiju linearFlushFrequency (default 10).")
-+            @Constraints.Min(1)
++            @Comment("How often (in seconds) buffered Linear region data is flushed to disk (default 10); mirrors the legacy linear flush keys.")
 +            public int flushFrequency = 10;
-+            @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core. Mirrors Kaiiju linearFlushThreads (default 1).")
++            @Comment("Max threads for the Linear flush pool. Positive values are used as-is (min 1). Negative values mean availableProcessors + value (min 1), e.g. -1 = all but one core (default 1). Inert unless >1: values <=1 keep the current serial flush path.")
 +            public int flushMaxThreads = 1;
++            @Comment("Linear - compression workers for future parallel flush. 0 (default) is inert: flush stays serial on the caller. Positive values would size a worker pool once wired; no threads are spawned in this release.")
++            public int compressionWorkers = 0;
++            @Comment("Linear - long-distance chunk matching radius for future flush batching. 0 (default) disables it; no behaviour change while 0.")
++            public int longDistanceMatching = 0;
++            @Comment("Linear - log per-folder flush batches at info level. False (default) keeps current warn-only logging.")
++            public boolean logFlushBatches = false;
 +
 +            @PostProcess
 +            private void postProcess() {
@@ -41,12 +42,22 @@ index 10bec0f46f96605d82d8ec77327f2e8af18c0fd2..ff082250a46a545be79d7af17f4ec085
 +                    LOGGER.error("[region-format] linear.flush-frequency must be >= 1, got {}. Falling back to 10.", this.flushFrequency);
 +                    this.flushFrequency = 10;
 +                }
-+                // Kaiiju 0004 semantics, verbatim: relative (negative) vs absolute threads.
++                // Relative (negative) vs absolute thread counts.
 +                if (this.flushMaxThreads < 0) {
 +                    this.flushMaxThreads = Math.max(Runtime.getRuntime().availableProcessors() + this.flushMaxThreads, 1);
 +                } else {
 +                    this.flushMaxThreads = Math.max(this.flushMaxThreads, 1);
 +                }
++                // Linear - inert-key clamps (defaults preserve today's serial behaviour; no @Constraints so fallbacks stay reachable).
++                if (this.compressionWorkers < 0) {
++                    LOGGER.error("[region-format] linear.compression-workers must be >= 0, got {}. Falling back to 0.", this.compressionWorkers);
++                    this.compressionWorkers = 0;
++                }
++                if (this.longDistanceMatching < 0) {
++                    LOGGER.error("[region-format] linear.long-distance-matching must be >= 0, got {}. Falling back to 0.", this.longDistanceMatching);
++                    this.longDistanceMatching = 0;
++                }
++                // Linear - logFlushBatches is boolean: no clamp needed (false = current warn-only logging).
 +            }
 +        }
 +    }
@@ -130,7 +141,7 @@ index 0000000000000000000000000000000000000000..ff1b3bc642d56726c3f6cf84478b33eb
 +}
 diff --git a/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6a19d8da5
+index 0000000000000000000000000000000000000000..891e8bde2005ed7af8dd323e933e4f6c3e23001b
 --- /dev/null
 +++ b/src/test/java/net/minecraft/util/worldupdate/RegionStorageUpgraderScanTest.java
 @@ -0,0 +1,117 @@
@@ -146,22 +157,22 @@ index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6
 +import org.junit.jupiter.params.provider.ValueSource;
 +
 +/**
-+ * L2-A5 / B3: both-extension upgrade-scan coverage.
++ * Both-extension upgrade-scan coverage.
 + *
-+ * <p>Kaiiju 0004 bug: upgrader REGEX
-+ * {@code "^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear | mca)$"} contains literal spaces inside
-+ * the alternation, matching {@code "linear "} / {@code " mca"} — never real filenames.
-+ * In 26.1.2 the scan lives in {@link RegionStorageUpgrader}:
-+ * line ~39 {@code REGEX} (mca-only) + line ~163 {@code listFiles} filter
-+ * ({@code endsWith(".mca")} only). The B3 fix extends BOTH to {@code linear|mca} with no
-+ * spaces.
++ * <p>The upgrader REGEX must accept both extensions with no literal spaces
++ * inside the alternation: {@code "^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear|mca)$"}.
++ * The scan lives in {@link RegionStorageUpgrader}: the {@code REGEX} field plus
++ * the {@code listFiles} filename filter ({@code endsWith} checks). Both cover
++ * {@code linear} and {@code mca}; filenames always start with the {@code r.}
++ * prefix.
++ * Only exact dual-extension names match; junk is rejected.
 + *
 + * <p>These tests read the REAL private {@code REGEX} via reflection when available (so a
 + * regression to spaced/mca-only fails), and always verify the filename filter predicate
-+ * and the buggy-vs-fixed pattern behaviour directly. No DataFixer/storage needed.
++ * and the fixed-vs-spaced pattern behaviour directly. No DataFixer/storage needed.
 + *
-+ * <p>Target path when integrated: {@code folia-server/src/test/java/...} (mirrors
-+ * {@code paper-server/src/test/java} JUnit-Jupiter layout).
++ * <p>Target path when integrated: the server {@code src/test/java} tree (mirrors
++ * the JUnit-Jupiter layout used by the other storage tests).
 + */
 +public class RegionStorageUpgraderScanTest {
 +
@@ -170,7 +181,7 @@ index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6
 +    private static final Pattern BUGGY_REGEX =
 +        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear | mca)$");
 +
-+    /** Best-effort read of the production REGEX; null if A4 moved it to a dispatch helper. */
++    /** Best-effort read of the production REGEX; null if the scan moved to a dispatch helper. */
 +    private static Pattern productionRegex() {
 +        try {
 +            Field f = RegionStorageUpgrader.class.getDeclaredField("REGEX");
@@ -210,7 +221,7 @@ index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6
 +
 +    @Test
 +    public void buggySpacedRegexMatchesNothingReal() {
-+        // Pin the Kaiiju 0004 defect: the spaced alternation never matches.
++        // Pin the defect: the spaced alternation never matches real names.
 +        String[] realNames = {"r.0.0.mca", "r.0.0.linear", "r.-1.2.mca", "r.-1.2.linear"};
 +        for (String name : realNames) {
 +            assertFalse(BUGGY_REGEX.matcher(name).matches(), "buggy REGEX unexpectedly matched " + name);
@@ -224,15 +235,15 @@ index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6
 +    public void productionRegexMatchesBothExtensions() {
 +        Pattern actual = productionRegex();
 +        assertNotNull(actual, "RegionStorageUpgrader.REGEX not found via reflection — "
-+            + "if A4 moved the scan to a dispatch helper, apply the B3 fix there (see BUGS.md)");
++            + "if the scan moved to a dispatch helper, apply the dual-extension fix there");
 +        for (String name : new String[]{"r.0.0.mca", "r.-1.2.mca", "r.0.0.linear", "r.-1.2.linear"}) {
 +            assertTrue(actual.matcher(name).matches(), "production REGEX must match " + name);
 +        }
 +        assertFalse(actual.matcher("r.0.0.txt").matches());
 +        assertFalse(actual.matcher("r.0.0.linear ").matches(), "production REGEX must not contain literal spaces");
-+        // SUM (Loop-2 integration): accept either alternation order — A4 ships
-+        // (mca|linear), A5-B3 shipped (linear|mca); both are the spaceless
-+        // dual-extension form. What matters is both extensions match, no spaces.
++        // Accept either alternation order — (mca|linear) or (linear|mca);
++        // both are the spaceless dual-extension form. What matters is both
++        // extensions match, no spaces.
 +        String pattern = actual.pattern();
 +        boolean ok = pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(linear|mca)$")
 +            || pattern.equals("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
@@ -253,7 +264,7 @@ index 0000000000000000000000000000000000000000..2c7570ed99160a8fe8243d0a0b5670c6
 +}
 diff --git a/src/test/java/net/minecraft/world/level/chunk/storage/BrokenSymlinkGuardTest.java b/src/test/java/net/minecraft/world/level/chunk/storage/BrokenSymlinkGuardTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..53f571ccf48b00f57123361df622e0b966d10039
+index 0000000000000000000000000000000000000000..e81808273eda40d543d5d0f4d145a6276ebc7bec
 --- /dev/null
 +++ b/src/test/java/net/minecraft/world/level/chunk/storage/BrokenSymlinkGuardTest.java
 @@ -0,0 +1,169 @@
@@ -269,38 +280,38 @@ index 0000000000000000000000000000000000000000..53f571ccf48b00f57123361df622e0b9
 +import org.junit.jupiter.api.io.TempDir;
 +
 +/**
-+ * L2-A5 / B2: broken-symlink guard fixture.
++ * Broken-symlink guard fixture.
 + *
-+ * <p>Kaiiju 0012 bug: {@code if (!this.format.equals("LINEAR")) return;} compares an enum
-+ * ({@code RegionFileFormat}) against the String {@code "LINEAR"}. An enum never equals a
-+ * String, so the condition is always true and the guard returned early on every call —
-+ * broken Linear symlinks were never detected.
++ * <p>The guard must compare the format enum by identity:
++ * {@code if (this.format != RegionFileFormat.LINEAR) return;}. Comparing an
++ * enum against the String {@code "LINEAR"} via {@code equals} is always
++ * false, so the condition held on every call and broken Linear symlinks
++ * were never detected.
 + *
-+ * <p>26.1.2 fix: {@code if (this.format != RegionFileFormat.LINEAR) return;} (enum identity).
-+ * The guard method itself lives in {@code RegionFileStorage} and its {@code format} /
-+ * {@code linearCrashOnBrokenSymlink} fields come from sibling A4's Linear dispatch work
-+ * (absent at authoring time — see BUGS.md). This test therefore mirrors the FIXED guard
-+ * body with a local enum of identical shape, plus a real broken-symlink fixture on disk,
-+ * so the symlink-detection logic (plain JDK, no server needed) is verified directly:
++ * <p>Fixed form: {@code if (this.format != RegionFileFormat.LINEAR) return;}
++ * (enum identity). The guard method itself lives in {@code RegionFileStorage};
++ * this test mirrors the FIXED guard body with a local enum of identical
++ * shape, plus a real broken-symlink fixture on disk, so the
++ * symlink-detection logic (plain JDK, no server needed) is verified directly:
 + *
 + * <pre>
 + *   if (!crashOnBrokenSymlink) return;
-+ *   if (format != LINEAR) return;                    // B2 fix (was: !format.equals("LINEAR"))
++ *   if (format != LINEAR) return;                          // identity check
 + *   if (!Files.isSymbolicLink(path)) return;
 + *   Path link = Files.readSymbolicLink(path);
 + *   if (!Files.exists(link) || !Files.isReadable(link)) throw new IOException(...);
 + * </pre>
 + *
-+ * <p>NOTE: the production guard also calls {@code MinecraftServer.getServer().halt(false)}
-+ * before throwing. The test helper deliberately omits the halt (it would kill the test
-+ * JVM) and asserts only the {@link IOException} path.
++ * <p>NOTE: the production guard also halts the server before throwing. The
++ * test helper deliberately omits the halt (it would kill the test JVM) and
++ * asserts only the {@link IOException} path.
 + *
-+ * <p>Target path when integrated: {@code folia-server/src/test/java/...} (mirrors
-+ * {@code paper-server/src/test/java} JUnit-Jupiter layout).
++ * <p>Target path when integrated: the server {@code src/test/java} tree (mirrors
++ * the JUnit-Jupiter layout used by the other storage tests).
 + */
 +public class BrokenSymlinkGuardTest {
 +
-+    /** Mirrors A4/Kaiiju {@code RegionFileFormat} (ANVIL, LINEAR) for guard-logic tests. */
++    /** Local stand-in for the production format enum (ANVIL, LINEAR). */
 +    private enum Format {
 +        ANVIL, LINEAR
 +    }
@@ -318,7 +329,7 @@ index 0000000000000000000000000000000000000000..53f571ccf48b00f57123361df622e0b9
 +        return !Files.exists(link) || !Files.isReadable(link);
 +    }
 +
-+    /** Fixed guard logic (B2). Throws on broken symlink only when LINEAR + flag set. */
++    /** Fixed guard logic. Throws on broken symlink only when LINEAR + flag set. */
 +    private static void fixedGuard(Path path, Format format, boolean crashOnBrokenSymlink) throws IOException {
 +        if (!crashOnBrokenSymlink) {
 +            return;
@@ -335,7 +346,7 @@ index 0000000000000000000000000000000000000000..53f571ccf48b00f57123361df622e0b9
 +        }
 +    }
 +
-+    /** Buggy Kaiiju 0012 guard logic: enum .equals(String) is always false -> always returns. */
++    /** Buggy guard logic: enum .equals(String) is always false -> always returns. */
 +    private static void buggyGuard(Path path, Format format, boolean crashOnBrokenSymlink) throws IOException {
 +        if (!crashOnBrokenSymlink) {
 +            return;
@@ -422,119 +433,21 @@ index 0000000000000000000000000000000000000000..53f571ccf48b00f57123361df622e0b9
 +        Path brokenLink = tempDir.resolve("r.4.4.linear");
 +        Files.createSymbolicLink(brokenLink, tempDir.resolve("missing3.bin"));
 +
-+        // Demonstrates the Kaiiju 0012 defect: buggy guard stays silent.
++        // Demonstrates the defect: the buggy guard stays silent.
 +        assertDoesNotThrow(() -> buggyGuard(brokenLink, Format.LINEAR, true));
 +    }
 +}
-diff --git a/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java b/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..f30d6e95901b84e50bb2ed971faff594f5ff02cc
---- /dev/null
-+++ b/src/test/java/net/minecraft/world/level/chunk/storage/RegionFileCoordinatesTest.java
-@@ -0,0 +1,106 @@
-+package net.minecraft.world.level.chunk.storage;
-+
-+import static org.junit.jupiter.api.Assertions.*;
-+
-+import java.nio.file.Path;
-+
-+import net.minecraft.world.level.ChunkPos;
-+
-+import org.junit.jupiter.api.Test;
-+import org.junit.jupiter.params.ParameterizedTest;
-+import org.junit.jupiter.params.provider.CsvSource;
-+import org.junit.jupiter.params.provider.ValueSource;
-+
-+/**
-+ * L2-A5 / B1: covers the fixed {@link RegionFileStorage#getRegionFileCoordinates} predicate.
-+ *
-+ * <p>Kaiiju 0004 bug: {@code !endsWith(".mca") || !endsWith(".linear")} is true for every
-+ * filename (nothing ends with both), so the method always returned null. The 26.1.2 fix
-+ * requires {@code startsWith("r.") AND (endsWith ".mca" OR endsWith ".linear")}.
-+ *
-+ * <p>Target path when integrated: {@code folia-server/src/test/java/...} (mirrors
-+ * {@code paper-server/src/test/java} JUnit-Jupiter layout; folia-server currently ships no
-+ * {@code src/test} tree, so these files live under {@code patches/A5/folia-server/...} for
-+ * the integrator to copy in). Calls the REAL static method — no server bootstrap needed
-+ * (pure filename parsing + {@link ChunkPos} value construction).
-+ */
-+public class RegionFileCoordinatesTest {
-+
-+    @ParameterizedTest(name = "mca {0} -> chunk ({1},{2})")
-+    @CsvSource({
-+        "r.0.0.mca,      0,   0",
-+        "r.1.2.mca,     32,  64",
-+        "r.-1.-2.mca,  -32, -64",
-+        "r.-1.2.mca,   -32,  64",
-+        "r.10.-3.mca,  320, -96",
-+    })
-+    public void mcaNamesResolve(String fileName, int chunkX, int chunkZ) {
-+        ChunkPos pos = RegionFileStorage.getRegionFileCoordinates(Path.of(fileName));
-+        assertNotNull(pos, "expected coordinates for " + fileName);
-+        assertEquals(chunkX, pos.x(), "chunkX for " + fileName);
-+        assertEquals(chunkZ, pos.z(), "chunkZ for " + fileName);
-+    }
-+
-+    @ParameterizedTest(name = "linear {0} -> chunk ({1},{2})")
-+    @CsvSource({
-+        "r.0.0.linear,      0,   0",
-+        "r.1.2.linear,     32,  64",
-+        "r.-1.-2.linear,  -32, -64",
-+        "r.-1.2.linear,   -32,  64",
-+        "r.10.-3.linear,  320, -96",
-+    })
-+    public void linearNamesResolve(String fileName, int chunkX, int chunkZ) {
-+        // Fails on vanilla 26.1.2 (mca-only) and on the buggy || predicate
-+        // (always null); passes with the B1 fix.
-+        ChunkPos pos = RegionFileStorage.getRegionFileCoordinates(Path.of(fileName));
-+        assertNotNull(pos, "expected coordinates for " + fileName);
-+        assertEquals(chunkX, pos.x(), "chunkX for " + fileName);
-+        assertEquals(chunkZ, pos.z(), "chunkZ for " + fileName);
-+    }
-+
-+    @ParameterizedTest(name = "junk {0} -> null")
-+    @ValueSource(strings = {
-+        "foo.mca",
-+        "r.0.0.txt",
-+        "r.0.0.mca.bak",
-+        "r.0.0.linear.tmp",
-+        "r.a.b.mca",
-+        "r.1.2",           // no extension
-+        "r..mca",          // missing coords
-+        "r.0.mca",         // missing one coord
-+        ".mca",
-+        "r.0.0.MCA",       // extensions are lowercase-sensitive
-+        "r.0.0.LINEAR",
-+        "r.0.0.mca ",      // trailing space
-+        "r.0.0. linear",   // spaced extension (B3 cousin)
-+        "r.0.0.linear ",   // trailing space
-+        "x.r.0.0.mca",     // wrong prefix
-+    })
-+    public void junkNamesReturnNull(String fileName) {
-+        assertNull(
-+            RegionFileStorage.getRegionFileCoordinates(Path.of(fileName)),
-+            "expected null for junk name " + fileName
-+        );
-+    }
-+
-+    @Test
-+    public void buggyPredicateIsAlwaysTrue() {
-+        // Regression pin: documents WHY the Kaiiju 0004 line was wrong.
-+        // For every sample name, (!endsWith .mca || !endsWith .linear) is true,
-+        // so the buggy guard rejected everything including valid inputs.
-+        String[] names = {"r.0.0.mca", "r.0.0.linear", "foo.txt"};
-+        for (String name : names) {
-+            boolean buggyReject = !name.endsWith(".mca") || !name.endsWith(".linear");
-+            assertTrue(buggyReject, "buggy || predicate rejects " + name);
-+        }
-+        // The fixed predicate accepts exactly the two known extensions.
-+        assertTrue(isAcceptedByFixedPredicate("r.0.0.mca"));
-+        assertTrue(isAcceptedByFixedPredicate("r.0.0.linear"));
-+        assertFalse(isAcceptedByFixedPredicate("foo.txt"));
-+    }
-+
-+    private static boolean isAcceptedByFixedPredicate(String fileName) {
-+        return fileName.startsWith("r.")
-+            && (fileName.endsWith(".mca") || fileName.endsWith(".linear"));
-+    }
-+}
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+index cd3e7cc8cf083915de46e03d9b2aaea3003f48fb..55257b03e975159be63aceeba22ad1dac458c50f 100644
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -167,7 +167,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+             primaryLevelData.setModdedInfo(this.server.getServerModName(), this.server.getModdedStatus().shouldReportAsModified());
+         }
+ 
+-        if (this.server.options.has("forceUpgrade")) {
++        // Honor --recreateRegionFiles alongside --forceUpgrade when deciding to run the upgrade path.
++        if (this.server.options.has("forceUpgrade") || this.server.options.has("recreateRegionFiles")) {
+             Main.forceUpgrade(this.server.storageSource, DataFixers.getDataFixer(), this.server.options.has("eraseCache"), () -> true, this.server.registryAccess(), this.server.options.has("recreateRegionFiles"));
+         }
+ 

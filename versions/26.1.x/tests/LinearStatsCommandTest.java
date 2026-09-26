@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * L2-STATS (Loop 2, Stage 2): linearstats command-hook coverage.
+ * Linearstats command-hook coverage.
  *
  * <p>NMS-light TempDir style like {@link LinearTimingInstrumentationTest}:
  * {@code SharedConstants}/{@code Bootstrap} only, never {@code halt()}, never
@@ -29,8 +29,8 @@ import org.junit.jupiter.api.io.TempDir;
  * <ul>
  *   <li>{@code snapshots()} aggregation across folders,</li>
  *   <li>per-file {@code linear$stats()} deltas,</li>
- *   <li>P1 regression: batch of N = exactly N flush events; a failure
- *       tightens {@code filesFlushed},</li>
+ *   <li>batch of N = exactly N flush events; a failure tightens
+ *       {@code filesFlushed},</li>
  *   <li>event-shape unit check if the Paper event class is visible.</li>
  * </ul>
  */
@@ -49,7 +49,7 @@ public class LinearStatsCommandTest {
 
     @AfterEach
     void resetCoordinator() {
-        // Minecraft-0017: age-based flush defaults to 10s; immediate-flush
+        // Age-based flush defaults to 10s; immediate-flush
         // tests force frequency 0, cleared here (also clears pool override).
         LinearFlushCoordinator.linear$resetFlushPoolForTests();
     }
@@ -141,7 +141,7 @@ public class LinearStatsCommandTest {
         dir.toFile().mkdirs();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
-        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        // Force immediate (age 0) so flushDirty drains.
         LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         LinearRegionFile[] files = new LinearRegionFile[n];
@@ -152,12 +152,12 @@ public class LinearStatsCommandTest {
                 files[i].write(new ChunkPos(i * 32, 0), ByteBuffer.wrap(pattern(64, 100 + i)));
                 coordinator.markDirty(files[i]);
             }
-            // P1: flushDirty itself records nothing (no batch increment); each
+            // flushDirty itself records nothing (no batch increment); each
             // doFlush records exactly one flush event, so batch of N == N.
             coordinator.flushDirty();
             LinearRegionTimings.LinearFolderSnapshot snap = coordinator.snapshot();
-            assertEquals(n, snap.flush().count(), "P1: batch of N must be exactly N flush events (no batch-level double-count)");
-            assertEquals(n, snap.filesFlushed(), "P1: filesFlushed == N on all-ok batch");
+            assertEquals(n, snap.flush().count(), "batch of N must be exactly N flush events (no batch-level double-count)");
+            assertEquals(n, snap.filesFlushed(), "filesFlushed == N on all-ok batch");
             assertEquals(0L, snap.failures(), "no failures on all-ok batch");
         } finally {
             for (LinearRegionFile f : files) {
@@ -177,7 +177,7 @@ public class LinearStatsCommandTest {
         dir.toFile().mkdirs();
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
-        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        // Force immediate (age 0) so flushDirty drains.
         LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         LinearRegionFile good0 = new LinearRegionFile(dir.resolve("r.10.0.linear"), COMPRESSION);
@@ -194,7 +194,7 @@ public class LinearStatsCommandTest {
             // 2 good files each contributed one doFlush flush event; the failing
             // file contributes a failure but no flush timing and no filesFlushed.
             assertTrue(snap.failures() >= 1, "failure must be recorded");
-            assertTrue(snap.filesFlushed() < 3, "P1: failure must tighten filesFlushed (< attempted 3), was " + snap.filesFlushed());
+            assertTrue(snap.filesFlushed() < 3, "failure must tighten filesFlushed (< attempted 3), was " + snap.filesFlushed());
             assertEquals(2L, snap.filesFlushed(), "only the 2 good files count as flushed");
             assertEquals(2L, snap.flush().count(), "only the 2 good doFlush calls count as flush events");
         } finally {
@@ -226,11 +226,11 @@ public class LinearStatsCommandTest {
             // Second flush is a clean-no-op (didIo false) and must record nothing.
             region.flush();
             LinearRegionTimings.LinearFolderSnapshot afterSecond = coordinator.snapshot();
-            assertEquals(flushAfterFirst, afterSecond.flush().count(), "P1/P3: clean-no-op flush records nothing (didIo guard)");
+            assertEquals(flushAfterFirst, afterSecond.flush().count(), "clean-no-op flush records nothing (didIo guard)");
             // Clean close likewise records nothing extra.
             region.close();
             LinearRegionTimings.LinearFolderSnapshot afterClose = coordinator.snapshot();
-            assertEquals(flushAfterFirst, afterClose.flush().count(), "P3: clean close records nothing");
+            assertEquals(flushAfterFirst, afterClose.flush().count(), "clean close records nothing");
         } finally {
             try {
                 region.close();
@@ -241,7 +241,7 @@ public class LinearStatsCommandTest {
 
     @Test
     public void panelDataWiresMeasurementCounters() throws IOException {
-        // Paper-0013 (panel): per-world level + time-since-last-flush via m0015.
+        // Panel: per-world level + time-since-last-flush via measurement counters.
         // NMS side pins that the snapshot carries every field the Adventure
         // panel displays (raw/compressed, p50/p99, millisSince, dirtyDepth);
         // formatting (human units, bar, alignment) lives in the Paper command.
@@ -269,9 +269,8 @@ public class LinearStatsCommandTest {
         assertTrue(snap.millisSinceLastFlush() < 60_000L, "millisSince recent");
         assertEquals(0, snap.dirtyDepth(), "panel dirty bar drained (barrier joined)");
         assertTrue(snap.filesFlushed() >= 1L, "panel files count");
-        // Bridge call site (minecraft-0019, same PATCH8): flushDirty with >=1
-        // attempted must not throw without Bukkit (sync overload catches and
-        // stays silent in NMS tests; on a server it fires the event).
+        // Bridge call site: flushDirty with >=1 attempted must not throw without Bukkit…
+        // (the sync overload catches and stays silent in NMS tests; on a server it fires the event).
         // Reaching here without exception pins the call site is wired and safe.
     }
 

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Minecraft-0017 (Loop 3, agent 25): age-based flush + first-dirty ordering.
+ * Minecraft-0012: age-based flush + first-dirty ordering.
  *
  * <p>NMS-light (TempDir + bootstrap): verifies flush-frequency gates
  * flushDirty (young files skip, old/forced flush), repeat marks do NOT
@@ -132,7 +132,7 @@ public class LinearAgeBasedFlushTest {
 
     @Test
     public void agedHeadAutoFlushesOnLaterMark() throws Exception {
-        // rc2 (D2): opportunistic driver. Production frequency >=1: an aged
+        // Opportunistic driver. Production frequency >=1: an aged
         // head flushes on a LATER markDirty with no explicit flushDirty.
         // (Folia autosave / plain save-all never reach flushDirty; without
         // this driver an EDIT workload accumulates dirty files that only a
@@ -167,7 +167,7 @@ public class LinearAgeBasedFlushTest {
 
     @Test
     public void youngFilesNeverAutoFlush() throws Exception {
-        // rc2 (D2): young files stay tracked across repeat marks (no
+        // Young files stay tracked across repeat marks (no
         // premature drain, no reorder); production frequency, all young.
         Path dir = this.tempDir.resolve("opportunistic-young");
         dir.toFile().mkdirs();

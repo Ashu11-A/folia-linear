@@ -10,14 +10,14 @@ import io.papermc.paper.configuration.GlobalConfiguration;
 import org.junit.jupiter.api.Test;
 
 /**
- * Paper-0012 (Loop 3, agent 21): inert global Linear keys.
+ * Inert global Linear keys.
  *
  * <p>NMS-light (no server, no datapacks): instantiates the config
  * {@code RegionFormat.Linear} inner class directly and exercises the
  * {@code @PostProcess} clamps. Verifies defaults preserve today's
  * behaviour (serial flush, no workers, LDM off, log off) and that no
  * {@code @Constraints.Min} annotation guards the new keys (post
- * paper-0009 convention: fallbacks stay reachable via PostProcess).
+ * project convention: fallbacks stay reachable via PostProcess).
  */
 public class LinearGlobalConfigTest {
 
@@ -73,8 +73,8 @@ public class LinearGlobalConfigTest {
 
     @Test
     public void noMinConstraintOnLinearKeys() throws Exception {
-        // Post paper-0009 convention: no @Constraints.Min on Linear keys;
-        // validation lives in @PostProcess so fallbacks are reachable.
+        // Convention: no @Constraints.Min on Linear keys; validation lives
+        // in @PostProcess so fallbacks are reachable.
         for (String name : new String[]{
             "flushFrequency", "flushMaxThreads",
             "compressionWorkers", "longDistanceMatching", "logFlushBatches"}) {

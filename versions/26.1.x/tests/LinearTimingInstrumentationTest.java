@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * L1-TIMING (Loop 1, Stage 2): lock-free timing instrumentation for the Linear
+ * Linear timing instrumentation:
  * read/write/flush paths.
  *
  * <p>NMS-light: TempDir fixtures + {@code SharedConstants}/{@code Bootstrap}

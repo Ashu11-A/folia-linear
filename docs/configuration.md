@@ -9,8 +9,8 @@ server does with a bad value.
 
 | Key | Config file | Scope | Type | Default |
 |---|---|---|---|---|
-| `region-format.format` | `paper-world.yml`, `paper-world-defaults.yml` | per world | `ANVIL` / `LINEAR` | `ANVIL` |
-| `region-format.linear.compression-level` | same | per world | int 1-22 | `1` |
+| `region-format.format` | `paper-world.yml`, `paper-world-defaults.yml` | per world | `ANVIL` / `LINEAR` | `LINEAR` |
+| `region-format.linear.compression-level` | same | per world | int 1-22 | `9` |
 | `region-format.linear.crash-on-broken-symlink` | same | per world | bool | `true` |
 | `region-format.linear.flush-frequency` | `paper-global.yml` | server | int >= 1 | `10` |
 | `region-format.linear.flush-max-threads` | `paper-global.yml` | server | int | `1` |
@@ -25,17 +25,18 @@ extended by `paper-0012`).
 ## Placement
 
 - `paper-world-defaults.yml` holds the fallback for every world. The block goes
-  at the top level, not under `chunks`.
-- `config/worlds/<world>/paper-world.yml` overrides it for one world. Leave the
+  at the top level, not under `chunks`. The shipped default is `LINEAR`; pin a
+  single world back to `ANVIL` with an explicit per-world `format: ANVIL`.
+- `<world>/dimensions/minecraft/<dimension>/paper-world.yml` overrides it for one world. Leave the
   file without a `region-format` block and the world inherits the default.
-- `paper-global.yml` holds the two flush keys, also at the top level.
+- `paper-global.yml` holds the global flush keys, also at the top level.
 - Restart after editing. None of these keys are re-read at runtime.
 
-Templates you can paste directly:
+Template you can paste directly (comment-free; one file holds the
+`paper-world-defaults.yml`, per-world `paper-world.yml` and `paper-global.yml`
+blocks — copy each block into its target file at the top level):
 
-- `release/paper-world-defaults.region-format.yml`
-- `release/paper-world.region-format.yml`
-- `release/paper-global.region-format.yml`
+- `release/region-format.yml`
 
 ## `format`
 
@@ -44,6 +45,10 @@ region-format:
   format: LINEAR
 ```
 
+- Shipped default is `LINEAR` for every world (see `release/region-format.yml`).
+  An explicit per-world `format: ANVIL` opts a world back out; mixed `ANVIL`
+  and `LINEAR` worlds in one process is the supported end state, not a
+  degraded one.
 - Chooses the extension used for **new writes**. Reads probe `.mca` first, then
   `.linear`, regardless of this setting, which is why flipping it never hides
   existing data.
@@ -60,7 +65,7 @@ region-format:
 ```yaml
 region-format:
   linear:
-    compression-level: 1
+    compression-level: 9
 ```
 
 - zstd level used when a dirty region is flushed. Valid 1 to 22, matching
@@ -68,9 +73,9 @@ region-format:
 - Does not affect the in-memory hot path. Chunks are staged LZ4-compressed as
   they are written and only re-encoded with zstd at flush time.
 - Validated and clamped in three places, so a bad value cannot reach the codec:
-  1. `@PostProcess` in `WorldConfiguration`: logs and resets to 1.
-  2. `AbstractRegionFileFactory.clampCompressionLevel`: returns
-     `DEFAULT_COMPRESSION_LEVEL` (1) outside `1..MAX_COMPRESSION_LEVEL` (22).
+1. `@PostProcess` in `WorldConfiguration`: logs and resets to 9.
+2. `AbstractRegionFileFactory.clampCompressionLevel`: returns
+   `DEFAULT_COMPRESSION_LEVEL` (9) outside `1..MAX_COMPRESSION_LEVEL` (22).
   3. The `LinearRegionFile` constructor: `Math.max(1, Math.min(22, level))`.
 - The level is recorded as one byte in the file header, but only for
   information. Decoding never reads it, so raising or lowering the setting needs
@@ -89,8 +94,8 @@ Measured effect on the live SMP tree, region files only, converted offline:
 | Total | 17,795,662,259 B | 11,852,762,522 B | 5,942,899,737 B | 33.4% |
 
 Against the original Anvil size of 26,833,329,824 B that is 55.8% saved. The CPU
-side of the same run, and why level 1 is still the recommended starting point,
-is in [benchmarks.md](benchmarks.md).
+side of the same run, and why level 6 stays the recommended starting point
+while level 9 is the shipped default, is in [benchmarks.md](benchmarks.md).
 
 ## `linear.crash-on-broken-symlink`
 
@@ -104,7 +109,7 @@ region-format:
   `Linear region file <path> is a broken symbolic link, crashing to prevent data loss`.
 - This is a data-loss guard. Continuing would let the chunk system treat the
   region as absent and regenerate it.
-- Check symlinks before opting a world in:
+- Check symlinks before enabling Linear on a world (or pinning one back):
   `find <world>/region <world>/poi <world>/entities -xtype l`.
 - Setting it to `false` downgrades the halt to a warning. Use that only to boot
   for forensics, then fix the underlying path.
@@ -177,10 +182,10 @@ Config problems, world still boots:
 | Line | Meaning |
 |---|---|
 | `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.` | `format:` misspelled or wrong case. The world is on Anvil despite the intent. |
-| `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 1.` | Level out of range, running at 1. |
-| `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.` | Frequency below 1. Inert either way. |
-| `[region-format] linear.compression-workers must be >= 0, got <v>. Falling back to 0.` | Workers below 0. Inert either way. |
-| `[region-format] linear.long-distance-matching must be >= 0, got <v>. Falling back to 0.` | LDM below 0. Inert either way. |
+| `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 9.` | Level out of range, running at 9. |
+| `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.` | Frequency below 1. File stays tracked for the next save. |
+| `[region-format] linear.compression-workers must be >= 0, got <v>. Falling back to 0.` | Workers below 0, running serial. |
+| `[region-format] linear.long-distance-matching must be >= 0, got <v>. Falling back to 0.` | LDM below 0, LDM off. |
 
 Runtime problems, act on these:
 

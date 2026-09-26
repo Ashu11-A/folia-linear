@@ -2,6 +2,54 @@
 
 Tags follow the base Minecraft version: `v26.1.2-linear.N`.
 
+## v1.2.0 - 2026-09-26
+
+Colossal release: patch consolidation, Linear-by-default, automatic startup
+conversion with an error-proof pipeline, and save-path durability wiring.
+Built from `versions/26.1.x` at Folia `62dc0f2` (MC 26.1.2), Java 25.
+
+- **Patch modules:** the 18 v1.1.0 patches are consolidated into 13 numbered
+  modules with overlaps folded (`versions/26.1.x/patches/MODULES.md` maps
+  old→new). Content is behavior-identical except where noted below.
+- **Defaults flip:** new worlds default to `region-format.format: LINEAR`
+  with `linear.compression-level: 9` (was ANVIL / 1). Worlds with an
+  explicit `format: ANVIL` keep working untouched (dual-read, ANVIL
+  fail-safes, and the `null → ANVIL` fallback are all preserved and tested).
+- **Startup auto-conversion:** on boot, before any plugin code runs, worlds
+  whose active format resolves to LINEAR convert leftover `.mca` files to
+  level-9 `.linear`. Explicit-ANVIL worlds never convert.
+- **Conversion pipeline:** per-file CONVERT → VALIDATE → DELETE stages run
+  in parallel across files on a bounded pool; per-file order is strict (never
+  delete unvalidated). Validation requires target existence, header sanity,
+  chunk-count parity, and full payload decompression. Failures re-queue up
+  to 3 attempts; exhaustion enters protection mode (descriptive terminal
+  alert) and halts the server for inspection. Valid shadows and divergent
+  pairs escalate, never auto-delete; crash orphans (`new_*` dirs) are
+  cleaned on the next run.
+- **Save-drain wiring:** the coordinator dirty set previously drained only
+  via bound pressure, so fresh worlds persisted nothing on clean stop.
+  Autosave (`ChunkMap.processUnloads`), explicit saves
+  (`ServerChunkCache.save`, forced iff flush), and shutdown
+  (`RegionShutdownThread` post-`stopServer`, plus `saveAllChunks` close and
+  `ServerLevel.close` backups) now drain via `flushAllDirty`/`evictAll`.
+  Proven live: dirty files at stop persist as `.linear`.
+- **`LinearStats` API:** `FolderSnapshot` gains `rawBytes`,
+  `compressedBytes`, `flushP50Micros`, `flushP99Micros`,
+  `millisSinceLastFlush` (already shown by `/linearstats`).
+- **Config:** the three `release/paper-*.region-format.yml` snippets are
+  replaced by one comment-free `release/region-format.yml` (`global:`,
+  `world-defaults:`, `per-world-example:` sections); explanations moved to
+  `docs/configuration.md`. Per-world file lives at
+  `<world>/dimensions/minecraft/<dimension>/paper-world.yml`.
+- **License:** `LICENSE` (GPL-3.0-only) added, matching the README claim.
+- **CI:** workflows split into `build.yml` (tags/releases, paperclip +
+  release assets) and `test.yml` (every push/PR: lint, preflight, unit
+  suites, config checks).
+- **Upgrading:** pin `format: ANVIL` on worlds you do NOT want converted
+  before first boot, or they convert automatically. Downgrade after
+  converting is one-way until re-conversion completes (do not run an older
+  jar on converted worlds and expect the new files to be picked up).
+
 ## Unreleased
 
 - **Fix (rc2, D2):** the `minecraft-0017` age-based flush never fired on its

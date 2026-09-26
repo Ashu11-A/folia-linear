@@ -1,0 +1,270 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:56:19 -0300
+Subject: [PATCH] Linear default format 9
+
+---
+ .../configuration/WorldConfiguration.java     |  12 +-
+ .../net/linear/LinearDefaultFormatTest.java   | 214 ++++++++++++++++++
+ 2 files changed, 220 insertions(+), 6 deletions(-)
+ create mode 100644 src/test/java/net/linear/LinearDefaultFormatTest.java
+
+diff --git a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+index 29a32b85e..af9ead0cc 100644
+--- a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+@@ -534,16 +534,16 @@ public class WorldConfiguration extends ConfigurationPart {
+     public RegionFormat regionFormat;
+ 
+     public class RegionFormat extends ConfigurationPart {
+-        @Comment("Region file format for NEW files. ANVIL (default) or LINEAR. Unknown values log SEVERE and fall back to ANVIL. Reads always probe both extensions (dual-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
++        @Comment("Region file format for NEW files. LINEAR (default) or ANVIL. Unknown values log SEVERE and fall back to ANVIL. Reads always probe both extensions (dual-read from day 1, sibling A5-B1), so flipping this flag never hides existing data.")
+         @Setting("format")
+-        public RegionFileFormat format = RegionFileFormat.ANVIL;
++        public RegionFileFormat format = RegionFileFormat.LINEAR;
+         @Setting("linear")
+         public Linear linear;
+ 
+         public class Linear extends ConfigurationPart {
+-            @Comment("ZSTD compression level for Linear files (1-22). Default 1. Out-of-range values log SEVERE and fall back to 1. NOTE: Kaiiju's message said 1-22 but its check was `> 23`; the correct max is 22 (zstd-jni 1.5.4-1).")
++            @Comment("ZSTD compression level for Linear files (1-22). Default 9. Out-of-range values log SEVERE and fall back to 9. NOTE: Kaiiju's message said 1-22 but its check was `> 23`; the correct max is 22 (zstd-jni 1.5.4-1).")
+             @Setting("compression-level")
+-            public int compressionLevel = 1;
++            public int compressionLevel = 9;
+             @Comment("Crash the server if a .linear path is a broken symlink (default true). Prevents silent data loss when symlinked volumes go missing. Set false only if you accept warn-only behaviour. Guard body lives in RegionFileStorage (sibling A5-B2 + A4 dispatch).")
+             @Setting("crash-on-broken-symlink")
+             public boolean crashOnBrokenSymlink = true;
+@@ -551,8 +551,8 @@ public class WorldConfiguration extends ConfigurationPart {
+             @PostProcess
+             private void postProcess() {
+                 if (this.compressionLevel < 1 || this.compressionLevel > 22) {
+-                    LOGGER.error("[region-format] linear.compression-level must be 1-22, got {}. Falling back to 1.", this.compressionLevel);
+-                    this.compressionLevel = 1;
++                    LOGGER.error("[region-format] linear.compression-level must be 1-22, got {}. Falling back to 9.", this.compressionLevel);
++                    this.compressionLevel = 9;
+                 }
+             }
+         }
+diff --git a/src/test/java/net/linear/LinearDefaultFormatTest.java b/src/test/java/net/linear/LinearDefaultFormatTest.java
+new file mode 100644
+index 000000000..04165900f
+--- /dev/null
++++ b/src/test/java/net/linear/LinearDefaultFormatTest.java
+@@ -0,0 +1,214 @@
++package net.linear;
++
++import static org.junit.jupiter.api.Assertions.*;
++
++import java.io.DataInputStream;
++import java.io.IOException;
++import java.lang.reflect.Constructor;
++import java.lang.reflect.Field;
++import java.lang.reflect.Method;
++import java.nio.ByteBuffer;
++import java.nio.file.Files;
++import java.nio.file.Path;
++
++import io.papermc.paper.configuration.WorldConfiguration;
++
++import net.minecraft.SharedConstants;
++import net.minecraft.server.Bootstrap;
++import net.minecraft.world.level.ChunkPos;
++
++import org.junit.jupiter.api.BeforeAll;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.io.TempDir;
++
++/**
++ * v1.1.1 default flip: region format ANVIL to LINEAR, linear compression
++ * level 1 to 9.
++ *
++ * <p>NMS half pins the factory side ({@code DEFAULT_COMPRESSION_LEVEL},
++ * clamp, header + payload round-trip at 9, {@code fromConfig} /
++ * {@code extensionFor} mappings). Paper half pins the config side
++ * ({@code WorldConfiguration} defaults, {@code @PostProcess} fallbacks,
++ * no {@code @Constraints} on the flipped keys).
++ *
++ * <p>The Paper half lives in this same file via direct import: this test
++ * compiles in the server {@code src/test} tree (same source-set as
++ * {@code LinearGlobalConfigTest}, which already imports
++ * {@code io.papermc.paper.configuration}). {@code WorldConfiguration}'s
++ * constructor is package-private, so the test allocates the outer instance
++ * reflectively with {@code (null, null)} — the region-format field
++ * initializers under test never touch those arguments — then uses the
++ * normal {@code outer.new RegionFormat()} / {@code regionFormat.new Linear()}
++ * inner-class forms plus {@code setAccessible} {@code @PostProcess}
++ * invocation, mirroring the existing config-test pattern.
++ *
++ * <p>Target path when integrated:
++ * {@code paper-server/src/test/java/net/linear/LinearDefaultFormatTest.java}.
++ */
++public class LinearDefaultFormatTest {
++
++    @TempDir
++    private Path tempDir;
++
++    @BeforeAll
++    static void bootstrapNms() {
++        // ChunkPos.<clinit> requires the registry bootstrap.
++        SharedConstants.tryDetectVersion();
++        Bootstrap.bootStrap();
++    }
++
++    // --- NMS: factory default level ---
++
++    @Test
++    public void defaultCompressionLevelIsNine() {
++        assertEquals(9, AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL,
++            "DEFAULT_COMPRESSION_LEVEL must be 9 after the v1.1.1 flip");
++        assertEquals(22, AbstractRegionFileFactory.MAX_COMPRESSION_LEVEL,
++            "MAX_COMPRESSION_LEVEL stays 22");
++    }
++
++    @Test
++    public void clampPassesNineAndFallsBackToNine() {
++        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(9), "9 passes through");
++        assertEquals(1, AbstractRegionFileFactory.clampCompressionLevel(1), "1 still in range");
++        assertEquals(22, AbstractRegionFileFactory.clampCompressionLevel(22), "22 still in range");
++        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(0), "0 falls back to 9");
++        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(23), "23 falls back to 9");
++        assertEquals(9, AbstractRegionFileFactory.clampCompressionLevel(-5), "negative falls back to 9");
++    }
++
++    // --- NMS: LinearRegionFile round-trip at the new default level ---
++
++    private static byte[] readAll(LinearRegionFile region, ChunkPos pos) throws IOException {
++        try (DataInputStream in = region.getChunkDataInputStream(pos)) {
++            return in == null ? null : in.readAllBytes();
++        }
++    }
++
++    @Test
++    public void levelNineHeaderAndPayloadRoundTrip() throws IOException {
++        Path file = this.tempDir.resolve("r.0.0.linear");
++        ChunkPos pos = new ChunkPos(3, 5);
++        byte[] payload = new byte[1024];
++        for (int i = 0; i < payload.length; i++) {
++            payload[i] = (byte) ((i * 17 + 3) & 0xFF);
++        }
++
++        LinearRegionFile region = new LinearRegionFile(file, 9);
++        region.write(pos, ByteBuffer.wrap(payload));
++        region.flush();
++        assertTrue(Files.exists(file), "flush must materialise the file");
++        assertTrue(Files.size(file) > 0, "flushed file must be non-empty");
++        assertArrayEquals(payload, readAll(region, pos), "pre-close read at level 9");
++        region.close();
++
++        // Simulated restart: the level byte in the header is informational;
++        // decoding is level-independent, so a fresh instance re-reads the payload.
++        LinearRegionFile reopened = new LinearRegionFile(file, 9);
++        try {
++            assertArrayEquals(payload, readAll(reopened, pos), "restart re-read at level 9");
++            assertTrue(reopened.hasChunk(pos), "chunk present after reopen");
++        } finally {
++            reopened.close();
++        }
++    }
++
++    // --- NMS: config-to-storage mapping untouched by the flip ---
++
++    @Test
++    public void fromConfigMappingUnchanged() {
++        assertEquals(RegionFileFormat.LINEAR,
++            AbstractRegionFileFactory.fromConfig(io.papermc.paper.configuration.type.RegionFileFormat.LINEAR), "LINEAR maps to LINEAR");
++        assertEquals(RegionFileFormat.ANVIL,
++            AbstractRegionFileFactory.fromConfig(io.papermc.paper.configuration.type.RegionFileFormat.ANVIL), "explicit ANVIL still maps to ANVIL");
++        assertEquals(RegionFileFormat.ANVIL,
++            AbstractRegionFileFactory.fromConfig(null), "null (pre-PostProcess) maps to ANVIL");
++    }
++
++    @Test
++    public void extensionForMappingsUnchanged() {
++        assertEquals(".linear", AbstractRegionFileFactory.extensionFor(RegionFileFormat.LINEAR));
++        assertEquals(".mca", AbstractRegionFileFactory.extensionFor(RegionFileFormat.ANVIL));
++        assertEquals(".linear", AbstractRegionFileFactory.extensionFor(io.papermc.paper.configuration.type.RegionFileFormat.LINEAR));
++        assertEquals(".mca", AbstractRegionFileFactory.extensionFor(io.papermc.paper.configuration.type.RegionFileFormat.ANVIL));
++    }
++
++    @Test
++    public void nmsFromStringSentinelUnchanged() {
++        assertEquals(RegionFileFormat.LINEAR, RegionFileFormat.fromString("LINEAR"));
++        assertEquals(RegionFileFormat.ANVIL, RegionFileFormat.fromString("ANVIL"));
++        assertEquals(RegionFileFormat.INVALID, RegionFileFormat.fromString(null));
++        assertEquals(RegionFileFormat.INVALID, RegionFileFormat.fromString("garbage"));
++    }
++
++    // --- Paper: WorldConfiguration defaults (reflective outer instance) ---
++
++    private static WorldConfiguration newWorldConfig() throws Exception {
++        Constructor<?> chosen = null;
++        for (Constructor<?> ctor : WorldConfiguration.class.getDeclaredConstructors()) {
++            if (ctor.getParameterCount() == 2) {
++                chosen = ctor;
++                break;
++            }
++        }
++        assertNotNull(chosen, "WorldConfiguration must keep its 2-arg constructor");
++        chosen.setAccessible(true);
++        // Region-format field initializers never touch these arguments.
++        return (WorldConfiguration) chosen.newInstance(null, null);
++    }
++
++    private static void runPostProcess(Object part) throws Exception {
++        Method m = part.getClass().getDeclaredMethod("postProcess");
++        m.setAccessible(true);
++        m.invoke(part);
++    }
++
++    @Test
++    public void paperDefaultsAreLinearNine() throws Exception {
++        WorldConfiguration outer = newWorldConfig();
++        WorldConfiguration.RegionFormat regionFormat = outer.new RegionFormat();
++        WorldConfiguration.RegionFormat.Linear linear = regionFormat.new Linear();
++        assertEquals(io.papermc.paper.configuration.type.RegionFileFormat.LINEAR, regionFormat.format, "format default is LINEAR");
++        assertEquals(9, linear.compressionLevel, "compression-level default is 9");
++    }
++
++    @Test
++    public void paperLinearPostProcessFallsBackToNine() throws Exception {
++        WorldConfiguration outer = newWorldConfig();
++        WorldConfiguration.RegionFormat.Linear linear = outer.new RegionFormat().new Linear();
++        linear.compressionLevel = 0;
++        runPostProcess(linear);
++        assertEquals(9, linear.compressionLevel, "level 0 falls back to 9");
++        linear.compressionLevel = 23;
++        runPostProcess(linear);
++        assertEquals(9, linear.compressionLevel, "level 23 falls back to 9");
++        linear.compressionLevel = 9;
++        runPostProcess(linear);
++        assertEquals(9, linear.compressionLevel, "level 9 survives");
++    }
++
++    @Test
++    public void paperNullFormatStillFallsBackToAnvil() throws Exception {
++        WorldConfiguration outer = newWorldConfig();
++        WorldConfiguration.RegionFormat regionFormat = outer.new RegionFormat();
++        // Unknown strings deserialise to null; the safety net must stay ANVIL
++        // so explicit-ANVIL worlds and garbage values keep working.
++        regionFormat.format = null;
++        runPostProcess(regionFormat);
++        assertEquals(io.papermc.paper.configuration.type.RegionFileFormat.ANVIL, regionFormat.format, "null format falls back to ANVIL");
++    }
++
++    @Test
++    public void noConstraintOnFlippedKeys() throws Exception {
++        Field format = WorldConfiguration.RegionFormat.class.getDeclaredField("format");
++        for (var ann : format.getAnnotations()) {
++            assertFalse(ann.annotationType().getName().contains("Constraints"),
++                "format must not carry @Constraints (found " + ann + ")");
++        }
++        Field level = WorldConfiguration.RegionFormat.Linear.class.getDeclaredField("compressionLevel");
++        for (var ann : level.getAnnotations()) {
++            assertFalse(ann.annotationType().getName().contains("Constraints"),
++                "compressionLevel must not carry @Constraints (found " + ann + ")");
++        }
++    }
++}
+-- 
+2.43.0
+

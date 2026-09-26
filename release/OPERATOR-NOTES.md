@@ -1,25 +1,27 @@
 # Operator notes
 
-For whoever is holding the pager during an opt-in. Keep `rollback.sh` and a
+For whoever is holding the pager during a rollout. Keep `rollback.sh` and a
 verified backup within reach before touching any flag.
 
 ## 1. Posture
 
-- Every world starts on `region-format.format: ANVIL`. Writers behave exactly
-  as stock. Readers additionally probe for `.linear`, which is harmless when
-  none exists.
-- Worlds that benefit stay `LINEAR`, worlds that do not stay `ANVIL`. A mixed
+- Every world starts on `region-format.format: LINEAR`. New writes go to
+  `.linear`; readers probe both `.mca` and `.linear`, so pre-existing Anvil
+  data keeps serving after the flip.
+- Worlds that do not benefit can be pinned back to `ANVIL` per world. A mixed
   deployment inside one process is the supported end state, not a degraded one.
 - The switch is per storage folder. Chunks and POI go through `ChunkMap`,
   entities through `EntityDataController`, and the dual-read probe covers both.
-- `compression-level` defaults to `1`. Tune it only after a full soak cycle.
+- `compression-level` defaults to `9`. The keep-it-at-1 soak gate is rescinded;
+  new worlds ship at 9, and changing it later is a config flip with no
+  conversion needed.
 - `crash-on-broken-symlink` defaults to `true`. A broken `.linear` symlink halts
   the server by design, because continuing would regenerate chunks. Resolve
   symlinks before flipping anything.
 
 Key reference: [../docs/configuration.md](../docs/configuration.md).
 
-## 2. Opt-in procedure
+## 2. Opt-out procedure (LINEAR is the default)
 
 1. **Backup, quiesced.** Stop the server or quiesce the world, then snapshot
    `region/`, `poi/` and `entities/` for the target world. Record it:
@@ -29,14 +31,15 @@ Key reference: [../docs/configuration.md](../docs/configuration.md).
    `find <world>/region <world>/poi <world>/entities -xtype l` must be empty.
 3. **Baseline.** `du -sb region poi entities`, plus counts of `*.mca` against
    `*.linear`.
-4. **Flip one world.** Low-risk first, never spawn, never all worlds at once.
-   Set `region-format.format: LINEAR` in that world's `paper-world.yml` only,
-   leaving `compression-level: 1` for the soak. Template:
-   `paper-world.region-format.yml` in this directory.
+4. **Pin back at most one world.** Low-risk first, never spawn, never all
+   worlds at once. Set `region-format.format: ANVIL` in that world's
+   `paper-world.yml` only. Template: the per-world `ANVIL` override block in
+   `region-format.yml` in this directory.
 5. **Restart** and watch the log, section 3. Soak at least one full save cycle
    and one restart. Linear buffers flush on cadence, and the restart proves the
    files reopen.
-6. **Expand** one world at a time, highest-churn worlds last.
+6. **Repeat** one world at a time if more worlds need pinning, highest-churn
+   worlds last.
 
 ## 3. Monitoring
 
@@ -56,10 +59,10 @@ The world boots, but not as intended. Fix the YAML.
 - `[region-format] Unknown region format, expected ANVIL or LINEAR. Falling back to ANVIL.`
   The `format:` value is misspelled or wrong case, for example lowercase
   `linear`. The world is on Anvil despite the intent.
-- `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 1.`
-  Out-of-range level, running at 1.
+- `[region-format] linear.compression-level must be 1-22, got <v>. Falling back to 9.`
+  Out-of-range level, running at 9.
 - `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.`
-  Frequency below 1. Inert either way, see section 4.
+  Frequency below 1. File stays tracked for the next save, see section 4.
 
 ### 3c. Lines that need action
 
@@ -98,9 +101,10 @@ Do not represent these as covered.
 3. **Single node, local disk.** NFS, shared storage and two nodes against one
    world directory are untested. Do not run two nodes against one world
    directory.
-4. **The flush knobs are inert.** `flush-frequency` and `flush-max-threads` are
-   declared and validated but nothing reads them. Tuning them is a silent
-   no-op.
+4. **The flush knobs are live, except batch logging.** `flush-frequency`
+   (age-based flush) and `flush-max-threads` (shared flush pool) are read;
+   only `log-flush-batches` remains inert (false = warn-only). Details in
+   `docs/configuration.md`.
 5. **Rung B needs your own stock jar.** `rollback.sh` defaults `--stock-jar` to
    a placeholder path and aborts with instructions until you point it at a real
    one. Rung A needs no extra jar.

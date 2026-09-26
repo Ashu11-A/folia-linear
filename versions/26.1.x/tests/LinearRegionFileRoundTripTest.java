@@ -18,24 +18,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * L3-T1 (Loop 3, carry-over D1): {@link LinearRegionFile} write → flush →
+ * {@link LinearRegionFile} write → flush →
  * reopen → read round-trip, including a simulated restart re-read.
  *
- * <p>Exercises EXACTLY the A3 contract surface (verified against
- * {@code patches/A3/folia-server/src/minecraft/java/net/linear/LinearRegionFile.java}
+ * <p>Exercises EXACTLY the region-file contract surface (verified against
+ * {@code net/linear/LinearRegionFile.java}
  * and the integrated fork file, which differs only by
  * {@code implements AbstractRegionFile} + a {@code clear(ChunkPos)} override +
  * {@code @Override}s — same ctor and seven methods):
  * {@code LinearRegionFile(Path, int)}, {@code write(ChunkPos, ByteBuffer)},
  * {@code getChunkDataInputStream(ChunkPos)}, {@code hasChunk(ChunkPos)},
  * {@code flush()}, {@code close()}, {@code isMarkedToSave()} /
- * {@code clearMarkedToSave()}. Deletion uses the A3 contract form
+ * {@code clearMarkedToSave()}. Deletion uses the contract form
  * (empty-buffer {@code write}), never {@code clear()}, so this file compiles
- * against both A3-pure and integrated trees.
+ * against both pure and integrated trees.
  *
  * <p>NMS bootstrap: {@link ChunkPos} class init needs
- * {@code Bootstrap.bootStrap()} (registry chain — see
- * {@code patches/L3-T1/BOOTSTRAP.md}), hence the {@code @BeforeAll} below.
+ * {@code Bootstrap.bootStrap()} (registry chain),
+ * hence the {@code @BeforeAll} below.
  * Payloads are opaque bytes; no NBT/registries/datapacks are involved.
  *
  * <p>Target path when integrated:
@@ -50,7 +50,7 @@ public class LinearRegionFileRoundTripTest {
 
     @BeforeAll
     static void bootstrapNms() {
-        // ChunkPos.<clinit> requires the registry bootstrap (see BOOTSTRAP.md).
+        // ChunkPos.<clinit> requires the registry bootstrap.
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
     }
@@ -152,7 +152,7 @@ public class LinearRegionFileRoundTripTest {
         region.flush();
         assertArrayEquals(once, Files.readAllBytes(file), "flush with no new writes must be byte-stable");
 
-        // A3-contract delete: empty write; slot reads absent but sibling survives.
+        // Contract delete: empty write; slot reads absent but sibling survives.
         region.write(q, ByteBuffer.allocate(0));
         assertFalse(region.hasChunk(q), "empty write must clear the slot");
         assertTrue(region.hasChunk(p));
@@ -178,7 +178,7 @@ public class LinearRegionFileRoundTripTest {
 
     @Test
     public void closedFileFailsFastAndCleanCloseCreatesNothing() throws IOException {
-        // Untouched missing file: flush/close create nothing (A3 lifecycle).
+        // Untouched missing file: flush/close create nothing (region lifecycle).
         Path missing = this.tempDir.resolve("r.9.9.linear");
         LinearRegionFile clean = new LinearRegionFile(missing, COMPRESSION);
         assertFalse(Files.exists(missing));

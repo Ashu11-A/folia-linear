@@ -1,0 +1,580 @@
+From 9879806b5bad2494dec4dc4fca34b6273659d652 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:42:41 -0300
+Subject: [PATCH] Linear flush coordinator
+
+One shared bounded server-wide flush pool behind flush-max-threads with
+caller participation and join-before-return durability barrier, plus
+direct-into-image LZ4 assembly. Age-based flush behind flush-frequency
+with first-dirty ordering (longest-unflushed pressure victim), an
+opportunistic per-markDirty age driver, and a flush-sync bridge call
+site after flushDirty drains. Eviction force-flushes young files.
+---
+ net/linear/LinearFlushCoordinator.java | 388 +++++++++++++++++++++++--
+ net/linear/LinearRegionFile.java       |  42 +--
+ 2 files changed, 382 insertions(+), 48 deletions(-)
+
+diff --git a/net/linear/LinearFlushCoordinator.java b/net/linear/LinearFlushCoordinator.java
+index 0d5c55b..c1bf0b4 100644
+--- a/net/linear/LinearFlushCoordinator.java
++++ b/net/linear/LinearFlushCoordinator.java
+@@ -2,8 +2,6 @@ package net.linear;
+ 
+ import java.nio.file.Path;
+ import java.util.ArrayList;
+-import java.util.Iterator;
+-import java.util.LinkedHashSet;
+ import java.util.List;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.atomic.LongAccumulator;
+@@ -23,26 +21,47 @@ import org.slf4j.LoggerFactory;
+  *       folder under its dimension path, so the folder key is exactly
+  *       {@code (ServerLevel x RegionFileType)} without holding a hard
+  *       reference to the level.</li>
+- *   <li><b>Moonrise executors only:</b> this class owns NO threads. Flushing
+- *       runs on the calling thread, which is always either a Moonrise
+- *       region-I/O thread (via {@code RegionFileStorage.finishWrite}, which
+- *       executes on the per-world {@code RegionDataController} I/O queue fed
+- *       by {@code MoonriseRegionFileIO.scheduleSave}) or the server save
+- *       thread (via {@code RegionFileStorage.flush}, reached through
+- *       {@code MoonriseRegionFileIO.flushRegionStorages}).</li>
+- *   <li><b>Bounded dirty set:</b> at most {@link #MAX_DIRTY} files are
+- *       tracked; the eldest is flushed inline (backpressure on the Moonrise
+- *       I/O thread) when the bound is exceeded. Duplicates coalesce because
+- *       the set is keyed by file identity.</li>
++ *   <li><b>One shared bounded pool, not Moonrise executors:</b> a single
++ *       static {@code ThreadPoolExecutor} (daemon {@code linear-flush-*}
++ *       threads, fixed size = {@code flush-max-threads}) is shared server-wide
++ *       across all coordinators (9 coordinators on a 3-world server share one
++ *       pool, not 9 pools). Flushing runs on the calling thread when
++ *       {@code <=1} (serial, byte-identical to pre-patch) or on the pool +
++ *       caller-participation when {@code >1}. Explicitly NOT a ForkJoinPool
++ *       (managed-blocker compensation breaks the memory budget), NOT
++ *       {@code invokeAll} (cancels on interrupt, truncating the durability
++ *       barrier), and NOT Moonrise's pool (submit-and-block from those threads
++ *       deadlocks). The caller always participates as a worker and joins
++ *       before returning, so {@code flushDirty()} remains a durability
++ *       barrier.</li>
++ *   <li><b>Bounded dirty set, first-dirty order:</b> at most {@link #MAX_DIRTY}
++ *       files are tracked in a {@code LinkedHashMap} keyed by file identity
++ *       with first-dirty nanos; repeat marks do NOT reorder.
++ *       Exceeding the bound flushes the longest-unflushed file inline
++ *       (backpressure on the Moonrise I/O thread). DELIBERATE change from
++ *       least-recently-written victim to longest-unflushed; strictly more
++ *       correct.</li>
++ *   <li><b>Age-based flush:</b> {@code flushDirty()} flushes only files whose
++ *       first-dirty age {@code >=} global {@code flush-frequency} seconds;
++ *       younger files stay tracked. Eviction forces all.
++ *       PLUS an opportunistic driver: every {@code markDirty} flushes
++ *       the longest-unflushed file when already age-eligible (bounded: at most
++ *       one file per call, same caller thread as the pressure backpressure,
++ *       production frequencies {@code >=1}s only). The driver exists because
++ *       the Folia save path never calls {@code flushDirty} on its own
++ *       (autosave and plain {@code save-all} bypass it); EDIT workloads
++ *       therefore self-drain within ~frequency without manual saves.</li>
+  *   <li><b>Unload eviction:</b> {@code RegionFileStorage.close()} calls
+- *       {@link #evict(Path)}, which flushes remaining dirty files and drops
+- *       the registry entry so worlds do not leak coordinators.</li>
++ *       {@link #evict(Path)}, which force-flushes remaining dirty files and
++ *       drops the registry entry so worlds do not leak coordinators.</li>
+  * </ol>
+  *
+  * <p>Durability model: {@code LinearRegionFile.write()} marks the file via
+  * {@code isMarkedToSave()}; {@code RegionFileStorage} reports each write to
+- * {@link #markDirty}, and the actual bytes hit disk on the next
+- * {@link #flushDirty()} (world save), bound-pressure flush, or eviction.
++ * {@link #markDirty} (first-dirty timestamp kept), and the actual bytes hit
++ * disk on the next age-eligible {@link #flushDirty()} (explicit
++ * {@code save-all flush} / shutdown path), the opportunistic per-write age
++ * flush, bound-pressure flush, or forced eviction.
+  * Polling uses the region-file contract ({@code isMarkedToSave()} leaves
+  * the flag set; the flag is cleared only after a successful flush).</p>
+  */
+@@ -55,6 +74,18 @@ public final class LinearFlushCoordinator {
+ 
+     private static final ConcurrentHashMap<String, LinearFlushCoordinator> BY_FOLDER = new ConcurrentHashMap<>();
+ 
++    // Linear - ONE shared bounded server-wide flush pool behind
++    // flush-max-threads. NOT per-coordinator (9 coordinators on a 3-world
++    // server would be 9 pools); NOT ForkJoinPool (managed-blocker compensation
++    // breaks the memory budget); NOT Moonrise's pool (submit-and-block from
++    // those threads deadlocks). Fixed-size ThreadPoolExecutor, daemon threads,
++    // shared across all coordinators; caller participates and joins (barrier).
++    private static final Object FLUSH_POOL_LOCK = new Object();
++    private static java.util.concurrent.ExecutorService FLUSH_POOL = null;
++    private static int FLUSH_POOL_THREADS = 0;
++    // Test-only override (null = read GlobalConfiguration).
++    private static volatile Integer FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
++
+     /** Per-folder singleton; creates on first use for a storage folder. */
+     public static LinearFlushCoordinator forFolder(Path folder) {
+         return BY_FOLDER.computeIfAbsent(key(folder), key -> new LinearFlushCoordinator(folder));
+@@ -63,11 +94,12 @@ public final class LinearFlushCoordinator {
+     /**
+      * Flushes any remaining dirty files for {@code folder} and drops the
+      * registry entry. Called from {@code RegionFileStorage.close()}.
++     * Forces all files regardless of age (unload must not lose young writes).
+      */
+     public static void evict(Path folder) {
+         LinearFlushCoordinator coordinator = BY_FOLDER.remove(key(folder));
+         if (coordinator != null) {
+-            coordinator.flushDirty();
++            coordinator.flushDirty(true);
+             coordinator.recordEvict(); // Linear: evict count (lock-free)
+         }
+     }
+@@ -76,9 +108,150 @@ public final class LinearFlushCoordinator {
+         return folder.toAbsolutePath().normalize().toString();
+     }
+ 
++    /**
++     * Linear - resolves the shared pool size from global
++     * {@code region-format.linear.flush-max-threads} (post-processed, >=1).
++     * Null config (tests, early boot) yields 1 = serial, byte-identical.
++     */
++    static int linear$resolveFlushThreads() {
++        Integer override = FLUSH_THREADS_OVERRIDE_FOR_TESTS;
++        if (override != null) {
++            return override;
++        }
++        try {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 1;
++            }
++            return cfg.regionFormat.linear.flushMaxThreads;
++        } catch (RuntimeException e) {
++            return 1;
++        }
++    }
++
++    /** Test-only: forces the pool size (null clears back to GlobalConfiguration). */
++    static void linear$setFlushThreadsForTests(Integer threads) {
++        FLUSH_THREADS_OVERRIDE_FOR_TESTS = threads;
++    }
++
++    /** Test-only: shuts the shared pool down and clears the overrides. */
++    static void linear$resetFlushPoolForTests() {
++        synchronized (FLUSH_POOL_LOCK) {
++            if (FLUSH_POOL != null) {
++                FLUSH_POOL.shutdown();
++                FLUSH_POOL = null;
++                FLUSH_POOL_THREADS = 0;
++            }
++            FLUSH_THREADS_OVERRIDE_FOR_TESTS = null;
++        }
++        FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
++        CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = 10_000_000_000L;
++        CACHED_FLUSH_FREQUENCY_AT_NANOS = 0L;
++    }
++
++    /**
++     * Linear - resolves flush-frequency seconds (global
++     * {@code region-format.linear.flush-frequency}, post-processed >=1).
++     * Null config yields 10 (documented default). Test override wins.
++     */
++    static long linear$resolveFlushFrequencySeconds() {
++        Long override = FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS;
++        if (override != null) {
++            return override;
++        }
++        try {
++            io.papermc.paper.configuration.GlobalConfiguration cfg =
++                io.papermc.paper.configuration.GlobalConfiguration.get();
++            if (cfg == null || cfg.regionFormat == null || cfg.regionFormat.linear == null) {
++                return 10L;
++            }
++            return cfg.regionFormat.linear.flushFrequency;
++        } catch (RuntimeException e) {
++            return 10L;
++        }
++    }
++
++    /** Test-only: forces flush-frequency seconds (null clears). */
++    static void linear$setFlushFrequencyForTests(Long seconds) {
++        FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = seconds;
++        // Keep the opportunistic markDirty driver deterministic in tests
++        // (no 5s cache staleness across override changes).
++        long now = System.nanoTime();
++        if (seconds == null) {
++            CACHED_FLUSH_FREQUENCY_AT_NANOS = 0L;
++        } else {
++            CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = seconds <= 0L ? 0L : seconds * 1_000_000_000L;
++            CACHED_FLUSH_FREQUENCY_AT_NANOS = now;
++        }
++    }
++
++    /**
++     * Linear - cached frequency nanos for the opportunistic
++     * markDirty driver. Production frequencies ({@code >=1}s) enable the
++     * driver; test-only {@code <=0} disables it (immediate drain stays on
++     * explicit {@code flushDirty} only, preserving batch/pool path coverage).
++     * Refreshed at most every 5s; races recompute the same value (benign).
++     */
++    static long linear$cachedFlushFrequencyNanos() {
++        long now = System.nanoTime();
++        long at = CACHED_FLUSH_FREQUENCY_AT_NANOS;
++        if (at != 0L && now - at < 5_000_000_000L) {
++            return CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY;
++        }
++        long seconds = linear$resolveFlushFrequencySeconds();
++        long nanos = seconds <= 0L ? 0L : seconds * 1_000_000_000L;
++        CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = nanos;
++        CACHED_FLUSH_FREQUENCY_AT_NANOS = now;
++        return nanos;
++    }
++
++    /**
++     * Linear - returns the shared pool, (re)creating it when
++     * the requested size differs. Caller holds no lock while flushing; pool
++     * creation is the only synchronized section.
++     */
++    private static java.util.concurrent.ExecutorService linear$sharedPool(int threads) {
++        synchronized (FLUSH_POOL_LOCK) {
++            if (FLUSH_POOL != null && FLUSH_POOL_THREADS == threads
++                    && !FLUSH_POOL.isShutdown() && !FLUSH_POOL.isTerminated()) {
++                return FLUSH_POOL;
++            }
++            if (FLUSH_POOL != null) {
++                FLUSH_POOL.shutdown();
++            }
++            FLUSH_POOL_THREADS = threads;
++            java.util.concurrent.ThreadFactory factory = r -> {
++                Thread t = new Thread(r);
++                t.setName("linear-flush-" + t.getId());
++                t.setDaemon(true);
++                return t;
++            };
++            // Fixed size = bounded concurrency. The queue itself is unbounded
++            // but bounded in practice by the snapshot size (<= MAX_DIRTY*2);
++            // bounding the queue with rejection would drop durability, so the
++            // bound lives in the thread count, not the queue.
++            FLUSH_POOL = new java.util.concurrent.ThreadPoolExecutor(
++                threads, threads, 60L, java.util.concurrent.TimeUnit.SECONDS,
++                new java.util.concurrent.LinkedBlockingQueue<>(), factory);
++            return FLUSH_POOL;
++        }
++    }
++
+     private final Path folder;
+-    /** Insertion-ordered identity set; guarded by {@code this}. */
+-    private final LinkedHashSet<AbstractRegionFile> dirty = new LinkedHashSet<>();
++    // Linear - FIRST-dirty ordering (LinkedHashMap, no reorder
++    // on repeat marks). Value is first-dirty nanos (System.nanoTime) for the
++    // age-based flush. DELIBERATE change from least-recently-written
++    // (remove+add tail) to longest-unflushed victim; strictly more correct.
++    // Guarded by {@code this}.
++    private final java.util.LinkedHashMap<AbstractRegionFile, Long> dirty = new java.util.LinkedHashMap<>();
++    // Flush-frequency override for tests (null = read
++    // GlobalConfiguration). Seconds, >=1 post-processed; nanos derived.
++    private static volatile Long FLUSH_FREQUENCY_SECONDS_OVERRIDE_FOR_TESTS = null;
++    // Linear - cached frequency nanos for the opportunistic markDirty
++    // driver (volatile; refreshed at most every 5s; cleared with the override).
++    private static volatile long CACHED_FLUSH_FREQUENCY_NANOS_FOR_DIRTY = 10_000_000_000L;
++    private static volatile long CACHED_FLUSH_FREQUENCY_AT_NANOS = 0L;
+     // Linear: lock-free folder-wide timing/counts. Hot updates use
+     // LongAdder/LongAccumulator only (no synchronized, no locks); dirtyDepth is
+     // the only value read under lock in snapshot().
+@@ -125,16 +298,47 @@ public final class LinearFlushCoordinator {
+      * Records a file with unflushed writes. Over-capacity evicts the eldest
+      * entry with an inline flush (backpressure on the caller, i.e. a Moonrise
+      * I/O thread), so write bursts cannot grow memory without bound.
++     *
++     * <p>Linear - FIRST-dirty ordering (no reorder on repeat
++     * marks). DELIBERATE change: the MAX_DIRTY victim is now the
++     * longest-unflushed file, not the least-recently-written one. A hot region
++     * rewritten every cycle keeps its original first-dirty timestamp and
++     * therefore becomes the pressure victim first, which is strictly more
++     * correct (oldest data at risk flushes first). Ship unconditionally.
++     *
++     * <p>Linear - opportunistic age flush. When no pressure victim
++     * exists, the head (longest-unflushed) is flushed inline if already
++     * age-eligible per flush-frequency (bounded: at most one file per call,
++     * same caller thread as the pressure backpressure, production frequencies
++     * {@code >=1}s only). This is the automatic driver the Folia save path
++     * lacks: autosave and plain {@code save-all} never reach
++     * {@code flushDirty}, so without this an EDIT workload accumulates dirty
++     * files that only a manual {@code save-all flush} or shutdown would drain.
+      */
+     public void markDirty(AbstractRegionFile file) {
++        final long now = System.nanoTime();
++        final long frequencyNanos = linear$cachedFlushFrequencyNanos();
+         AbstractRegionFile eldest = null;
++        AbstractRegionFile aged = null;
+         synchronized (this) {
+-            this.dirty.remove(file);
+-            this.dirty.add(file);
++            if (!this.dirty.containsKey(file)) {
++                this.dirty.put(file, now);
++            }
++            // Repeat marks: no reorder, no timestamp refresh (first-dirty wins).
+             if (this.dirty.size() > MAX_DIRTY) {
+-                Iterator<AbstractRegionFile> it = this.dirty.iterator();
+-                eldest = it.next();
++                java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
++                    this.dirty.entrySet().iterator();
++                eldest = it.next().getKey();
+                 it.remove();
++            } else if (frequencyNanos > 0L && !this.dirty.isEmpty()) {
++                // Opportunistic age flush (head only, one file per call).
++                java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> head =
++                    this.dirty.entrySet().iterator();
++                java.util.Map.Entry<AbstractRegionFile, Long> e = head.next();
++                if (now - e.getValue() >= frequencyNanos) {
++                    aged = e.getKey();
++                    head.remove();
++                }
+             }
+         }
+         // Linear: markDirty count outside sync (lock-free).
+@@ -142,23 +346,138 @@ public final class LinearFlushCoordinator {
+         if (eldest != null) {
+             this.flushOne(eldest);
+         }
++        if (aged != null) {
++            this.flushOne(aged);
++        }
+     }
+ 
+-    /** Flushes every tracked dirty file. Called from storage save/close. */
++    /** Flushes dirty files old enough per flush-frequency. Called from storage save. */
+     public void flushDirty() {
++        this.flushDirty(false);
++    }
++
++    /**
++     * Linear - REAL age-based flush behind flush-frequency.
++     * Only files whose first-dirty age {@code >=} frequency seconds are
++     * flushed; younger files stay tracked for the next save. {@code force}
++     * (evict/unload) flushes everything regardless of age.
++     */
++    void flushDirty(boolean force) {
+         if (this.isEmpty()) {
+             return;
+         }
++        final long now = System.nanoTime();
++        final long frequencyNanos;
++        if (force) {
++            frequencyNanos = 0L;
++        } else {
++            long seconds = linear$resolveFlushFrequencySeconds();
++            if (seconds < 0L) {
++                seconds = 10L;
++            }
++            frequencyNanos = seconds * 1_000_000_000L;
++        }
+         final List<AbstractRegionFile> snapshot;
+         synchronized (this) {
+             if (this.dirty.isEmpty()) {
+                 return;
+             }
+-            snapshot = new ArrayList<>(this.dirty);
+-            this.dirty.clear();
++            if (force) {
++                snapshot = new ArrayList<>(this.dirty.keySet());
++                this.dirty.clear();
++            } else {
++                snapshot = new ArrayList<>();
++                java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
++                    this.dirty.entrySet().iterator();
++                while (it.hasNext()) {
++                    java.util.Map.Entry<AbstractRegionFile, Long> e = it.next();
++                    long age = now - e.getValue();
++                    if (age >= frequencyNanos) {
++                        snapshot.add(e.getKey());
++                        it.remove();
++                    }
++                }
++                if (snapshot.isEmpty()) {
++                    return;
++                }
++            }
+         }
+-        for (AbstractRegionFile file : snapshot) {
+-            this.flushOne(file);
++        // Linear - <=1 keeps the pre-patch serial loop
++        // byte-identical (no pool, no futures, no extra branches in the loop).
++        // Linear - minecraft-0019: missing bridge call site.
++        // Fires LinearRegionFlushCompletedEvent right after flushDirty drains,
++        // via the Paper sync overload (no Plugin on this NMS path; autosave +
++        // manual saves all funnel through here). filesAttempted = snapshot
++        // size (>=1, clean-no-ops already returned above).
++        final long batchStartNanos = System.nanoTime();
++        final int filesAttempted = snapshot.size();
++        try {
++            final int threads = linear$resolveFlushThreads();
++            if (threads <= 1 || snapshot.size() <= 1) {
++                for (AbstractRegionFile file : snapshot) {
++                    this.flushOne(file);
++                }
++                return;
++            }
++            // Parallel path (>1): ONE shared pool, caller participates as a worker
++            // and joins before returning (durability barrier). NOT invokeAll
++            // (cancels tasks on interrupt, truncating the barrier); individual
++            // Future.get preserves every task. flushOne already records failures,
++            // so ExecutionException needs no extra counting, just barrier progress.
++            final java.util.concurrent.ExecutorService pool;
++            try {
++                pool = linear$sharedPool(threads);
++            } catch (RuntimeException fallback) {
++                for (AbstractRegionFile file : snapshot) {
++                    this.flushOne(file);
++                }
++                return;
++            }
++            final java.util.List<java.util.concurrent.Future<?>> futures =
++                new java.util.ArrayList<>(snapshot.size() - 1);
++            for (int i = 1; i < snapshot.size(); i++) {
++                final AbstractRegionFile f = snapshot.get(i);
++                try {
++                    futures.add(pool.submit(() -> {
++                        this.flushOne(f);
++                        return null;
++                    }));
++                } catch (RuntimeException submitFailed) {
++                    // Queue/reject fallback: run inline so durability is not lost.
++                    this.flushOne(f);
++                }
++            }
++            // Caller work: first file inline (participation).
++            this.flushOne(snapshot.get(0));
++            boolean interrupted = false;
++            for (java.util.concurrent.Future<?> fut : futures) {
++                while (true) {
++                    try {
++                        fut.get();
++                        break;
++                    } catch (InterruptedException ie) {
++                        // Do NOT cancel others (invokeAll would); keep waiting so
++                        // the barrier is not truncated, re-interrupt at the end.
++                        interrupted = true;
++                    } catch (java.util.concurrent.ExecutionException ee) {
++                        break;
++                    } catch (RuntimeException re) {
++                        break;
++                    }
++                }
++            }
++            if (interrupted) {
++                Thread.currentThread().interrupt();
++            }
++        } finally {
++            final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
++            try {
++                io.papermc.paper.linear.LinearFlushBridge.notifyFlushSync(
++                    key(this.folder), filesAttempted, elapsedMicros);
++            } catch (RuntimeException | LinkageError ignored) {
++                // Tests without Bukkit, or Paper bridge absent: event stays
++                // silent, durability already complete (barrier joined above).
++            }
+         }
+     }
+ 
+@@ -171,6 +490,14 @@ public final class LinearFlushCoordinator {
+         return this.dirty.size();
+     }
+ 
++    /**
++     * Linear - test-only view of first-dirty order (head =
++     * longest-unflushed). Returns files in dirty-set iteration order.
++     */
++    synchronized java.util.List<AbstractRegionFile> linear$dirtyOrderForTests() {
++        return new java.util.ArrayList<>(this.dirty.keySet());
++    }
++
+     private void flushOne(AbstractRegionFile file) {
+         boolean ok = false;
+         try {
+@@ -196,9 +523,10 @@ public final class LinearFlushCoordinator {
+             // Re-queue (bounded) so a transient failure is retried instead of
+             // silently dropping durability. The flag was NOT cleared above,
+             // so no data is lost even if the re-queue itself overflows.
++            // First-dirty ordering: keep original timestamp when present.
+             synchronized (this) {
+                 if (this.dirty.size() < MAX_DIRTY * 2) {
+-                    this.dirty.add(file);
++                    this.dirty.putIfAbsent(file, System.nanoTime());
+                 }
+             }
+         }
+diff --git a/net/linear/LinearRegionFile.java b/net/linear/LinearRegionFile.java
+index aadea43..8ebdee6 100644
+--- a/net/linear/LinearRegionFile.java
++++ b/net/linear/LinearRegionFile.java
+@@ -41,8 +41,11 @@ import org.slf4j.Logger;
+  *
+  * <h2>Ownership / concurrency contract</h2>
+  * <ul>
+- *   <li>No thread-per-file, no background flusher, no global static state, no
+- *       private thread pools. This class never spawns or parks threads.</li>
++ *   <li>No thread-per-file, no background flusher. This class never spawns or
++ *       parks threads; the single shared flush pool lives in
++ *       {@code LinearFlushCoordinator} (server-wide, bounded
++ *       by {@code flush-max-threads}) and calls {@link #flush()} from pool
++ *       threads, serialised per-file by {@code flushGuard}.</li>
+  *   <li>Two locks, always leaf-ordered, never held across file IO or zstd work:
+  *       {@code slotLock} guards the slot tables and the dirty flag in short
+  *       critical sections; {@code flushGuard} serialises concurrent
+@@ -418,26 +421,19 @@ public final class LinearRegionFile implements AbstractRegionFile {
+             }
+             didIo = true; // Linear: past both clean-no-op exits, IO follows.
+ 
+-            // LZ4 -> raw (unlocked, CPU only).
+-            final ByteBuffer[] plain = new ByteBuffer[SLOTS];
++            // Linear - decompress each LZ4 slot straight into its
++            // final offset in image (removes one full region copy; previously
++            // held plain[] AND image ~2x). Absolute LZ4 calls leave positions
++            // untouched, so the table puts + absolute decompresses compose.
+             long totalRaw = 0L;
+             for (int i = 0; i < SLOTS; i++) {
+                 if (snapSize[i] > 0) {
+-                    final ByteBuffer out = ByteBuffer.allocateDirect(snapSize[i]);
+-                    final ByteBuffer frame = snapPacked[i].duplicate();
+-                    final int consumed = LZ4.fastDecompressor().decompress(frame, frame.position(), out, 0, snapSize[i]);
+-                    if (consumed != frame.remaining()) {
+-                        throw new IOException("LZ4 frame mismatch in slot " + i + " of " + this.file);
+-                    }
+-                    out.position(snapSize[i]);
+-                    out.flip();
+-                    plain[i] = out;
+                     totalRaw += snapSize[i];
++                    if (totalRaw > (long) Integer.MAX_VALUE - TABLE_SIZE) {
++                        throw new IOException("Region image too large for " + this.file);
++                    }
+                 }
+             }
+-            if (totalRaw > (long) Integer.MAX_VALUE - TABLE_SIZE) {
+-                throw new IOException("Region image too large for " + this.file);
+-            }
+ 
+             // Assemble the decompressed region image in one direct buffer.
+             final ByteBuffer image = ByteBuffer.allocateDirect(TABLE_SIZE + (int) totalRaw);
+@@ -445,11 +441,21 @@ public final class LinearRegionFile implements AbstractRegionFile {
+                 image.putInt(snapSize[i]);
+                 image.putInt(snapTime[i]);
+             }
++            long writeOffset = TABLE_SIZE;
+             for (int i = 0; i < SLOTS; i++) {
+-                if (plain[i] != null) {
+-                    image.put(plain[i].duplicate());
++                if (snapSize[i] > 0) {
++                    final ByteBuffer frame = snapPacked[i].duplicate();
++                    final int consumed = LZ4.fastDecompressor().decompress(
++                        frame, frame.position(), image, (int) writeOffset, snapSize[i]);
++                    if (consumed != frame.remaining()) {
++                        throw new IOException("LZ4 frame mismatch in slot " + i + " of " + this.file);
++                    }
++                    writeOffset += snapSize[i];
+                 }
+             }
++            // Table puts advanced position to TABLE_SIZE; absolute decompresses
++            // did not move it, so position explicitly to the end before flip.
++            image.position((int) (TABLE_SIZE + totalRaw));
+             image.flip();
+ 
+             // Stream to tmp: header (length patched later) + zstd frame + footer.
+-- 
+2.43.0
+

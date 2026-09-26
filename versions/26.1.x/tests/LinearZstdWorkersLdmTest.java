@@ -16,12 +16,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Minecraft-0018 (Loop 3, agent 26): zstd workers + LDM + reader long-max.
+ * Zstd workers + LDM + reader long-max.
  *
  * <p>NMS-light: verifies both default 0 (inert, serial, LDM off), writer
  * setWorkers/setLong before first write (round-trip), reader setLongMax(27)
  * harmless no-op (LDM-27 frames decode), and out-of-range LDM treated as off.
- * Verified numbers from Loop-1 agent 10 (10-zstd-upstream.md).
  */
 public class LinearZstdWorkersLdmTest {
 
@@ -92,7 +91,7 @@ public class LinearZstdWorkersLdmTest {
     public void workersAtLowLevelRoundTrip() throws Exception {
         Path dir = this.tempDir.resolve("workers18");
         dir.toFile().mkdirs();
-        // MT@L1: jobs exist (2MiB default job), safe operating point per agent 10.
+        // Workers at level 1: jobs exist (2MiB default job), safe operating point.
         LinearRegionFile.linear$setCompressionWorkersForTests(2);
         LinearRegionFile.linear$setLongDistanceMatchingForTests(0);
         Path file = dir.resolve("r.0.0.linear");
@@ -118,7 +117,7 @@ public class LinearZstdWorkersLdmTest {
     public void ldm27RoundTripAndReaderDecodes() throws Exception {
         Path dir = this.tempDir.resolve("ldm18");
         dir.toFile().mkdirs();
-        // LDM@L1 cheap per agent 10 (+31MB, stock reader decodes).
+        // LDM at level 1 is cheap (+31MB, stock reader decodes).
         LinearRegionFile.linear$setCompressionWorkersForTests(0);
         LinearRegionFile.linear$setLongDistanceMatchingForTests(27);
         Path file = dir.resolve("r.0.0.linear");

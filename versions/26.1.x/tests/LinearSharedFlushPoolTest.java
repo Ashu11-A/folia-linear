@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Minecraft-0016 (Loop 3, agent 24): shared flush pool + direct-into-image.
+ * Minecraft-0012: shared flush pool + direct-into-image.
  *
  * <p>NMS-light (TempDir + bootstrap): verifies the serial default
  * ({@code <=1} keeps the pre-patch loop), the parallel barrier
@@ -63,7 +63,7 @@ public class LinearSharedFlushPoolTest {
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
         LinearFlushCoordinator.linear$setFlushThreadsForTests(1);
-        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        // Force immediate (age 0) so flushDirty drains.
         LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         LinearRegionFile a = new LinearRegionFile(dir.resolve("r.0.0.linear"), COMPRESSION);
@@ -90,7 +90,7 @@ public class LinearSharedFlushPoolTest {
         LinearFlushCoordinator coordinator = LinearFlushCoordinator.forFolder(dir);
         coordinator.resetForTests();
         LinearFlushCoordinator.linear$setFlushThreadsForTests(4);
-        // Minecraft-0017: force immediate (age 0) so flushDirty drains.
+        // Force immediate (age 0) so flushDirty drains.
         LinearFlushCoordinator.linear$setFlushFrequencyForTests(0L);
 
         final int n = 6;

@@ -1,0 +1,951 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: folia-linear-build <folia-linear-build@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 15:58:25 -0300
+Subject: [PATCH] Linear conversion pipeline
+
+Parallel convert-validate-delete pipeline with retry-3, protection mode,
+crash-resume and a clean public API for startup conversion.
+---
+ net/linear/LinearRegionConverter.java | 926 ++++++++++++++++++++++++++
+ 1 file changed, 926 insertions(+)
+ create mode 100644 net/linear/LinearRegionConverter.java
+
+diff --git a/net/linear/LinearRegionConverter.java b/net/linear/LinearRegionConverter.java
+new file mode 100644
+index 0000000..c6197e8
+--- /dev/null
++++ b/net/linear/LinearRegionConverter.java
+@@ -0,0 +1,931 @@
++package net.linear;
++
++import java.io.DataInputStream;
++import java.io.IOException;
++import java.nio.ByteBuffer;
++import java.nio.ByteOrder;
++import java.nio.channels.FileChannel;
++import java.nio.file.DirectoryStream;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.StandardCopyOption;
++import java.nio.file.StandardOpenOption;
++import java.util.ArrayList;
++import java.util.Comparator;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Objects;
++import java.util.concurrent.Callable;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Future;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++import net.minecraft.world.level.ChunkPos;
++import net.minecraft.world.level.Level;
++import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
++
++/**
++ * Parallel convert-validate-delete pipeline for startup region conversion.
++ *
++ * <p>Per chunk-file three stages, in strict per-file order:</p>
++ * <ol>
++ *   <li>CONVERSION: {@code r.X.Z.mca} is copied chunk-by-chunk into a staging
++ *       file under the sibling {@code new_<folder>} directory, flushed, then
++ *       moved to the final {@code r.X.Z.linear} beside the source.</li>
++ *   <li>VALIDATION: the staged-then-moved target is checked (existence, size,
++ *       chunk-count parity, header sanity, full payload verification)
++ *       BEFORE the source is touched.</li>
++ *   <li>DELETION: only after VALIDATED, the source {@code .mca} is deleted.</li>
++ * </ol>
++ *
++ * <p>Parallelism is across files: a bounded pool runs one task per file, so
++ * different files are simultaneously in different stages. Per-file order is
++ * enforced by an explicit state machine; a file is never deleted unvalidated.</p>
++ *
++ * <p>B2 convergence point: B2 exposes folder conversion on
++ * {@code RegionStorageUpgrader} as
++ * {@code convertFolderToLinear(Path, int, Listener)} and that method is a
++ * thin hop delegating straight to
++ * {@link #convertRegionFolder} (verified against the B2 working tree: level
++ * clamped via {@code AbstractRegionFileFactory}, then direct delegation, no
++ * second copy of the file logic). This file therefore owns the single copy of
++ * the conversion implementation (inline, using the same primitives as the
++ * recreate path: {@code AbstractRegionFileFactory.get} for reads, write to
++ * the sibling {@code new_} directory, explicit flush, extension-aware plain
++ * move). No circular call exists: this file never calls back into B2. If B2's
++ * signature drifts (different owner class, extra params, checked exceptions),
++ * do NOT adapt silently: keep this path and document the drift in the failure
++ * detail so operators see it in the protection alert.</p>
++ */
++public final class LinearRegionConverter {
++
++    private static final java.util.logging.Logger LOGGER =
++        java.util.logging.Logger.getLogger(LinearRegionConverter.class.getName());
++
++    /** Attempts per file before protection mode (first try + 2 retries). */
++    public static final int MAX_ATTEMPTS = 3;
++
++    /** Linear on-disk magic opening/closing a region file. */
++    static final long SUPERBLOCK = 0xC3FF13183CCA9D9AL;
++    /** Oldest linear version accepted on read. */
++    static final byte VERSION_MIN = 1;
++    /** Latest linear version accepted on read. */
++    static final byte VERSION_MAX = 2;
++    /** Header + footer minimum: a valid file is larger than this. */
++    static final long MIN_VALID_SIZE = 32L + 8L;
++    /**
++     * Minimum size of a valid {@code .mca} file: two 4 KiB sectors (offset
++     * table + timestamp table). Vanilla pads every region file to at least
++     * this on open, so a smaller file was never written by vanilla and is
++     * treated as truncated/corrupt (FAILED path, never delete).
++     */
++    static final long MIN_ANVIL_SIZE = 8192L;
++
++    private static final Pattern REGION_NAME =
++        Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.(mca|linear)$");
++    private static final String NEW_DIRECTORY_PREFIX = "new_";
++
++    /** Per-file stage. Package-visible for unit tests (no bootstrap needed). */
++    enum FileState {
++        CONVERTING,
++        CONVERTED,
++        VALIDATING,
++        VALIDATED,
++        DELETING,
++        DELETED,
++        FAILED
++    }
++
++    /** Terminal per-file outcome reported to {@link Listener}. */
++    public enum Status {
++        CONVERTED,
++        VALIDATED,
++        DELETED,
++        FAILED,
++        SKIPPED
++    }
++
++    /** Terminal per-file record. */
++    public record FileResult(Path source, Path target, Status status, String detail) {}
++
++    /** Stage/retry observer. Implementations must be thread-safe: callbacks arrive concurrently from pool threads. */
++    public interface Listener {
++        void onFile(FileResult r);
++        void onRetry(Path source, int attempt, String reason);
++    }
++
++    /** Folder-level totals. {@code failures} holds one entry per terminally failed file. */
++    public record ConversionSummary(
++        int converted, int validated, int deleted, int failed, java.util.List<FileResult> failures) {}
++
++    /** Thrown when one or more files exhaust all attempts. The caller (B2) halts for inspection. */
++    public static class ConversionProtectionException extends Exception {
++        private final ConversionSummary summary;
++
++        public ConversionProtectionException(String message, ConversionSummary summary) {
++            super(message);
++            this.summary = summary;
++        }
++
++        public ConversionSummary getSummary() {
++            return this.summary;
++        }
++    }
++
++    private LinearRegionConverter() {}
++
++    /**
++     * Converts every {@code r.*.mca} in {@code regionFolder} to
++     * {@code r.*.linear} with validate-before-delete, retry-3 and
++     * crash-resume. Blocks the calling (boot) thread until every file settles.
++     *
++     * <p>If {@code regionFolder} cannot be listed (missing or unreadable
++     * directory), candidate collection yields zero candidates and this method
++     * returns an all-zeros summary. No behavior change, no failure: nothing
++     * to convert, nothing fails.</p>
++     *
++     * @param regionFolder folder holding {@code r.X.Z.mca} files (e.g. {@code region/})
++     * @param compressionLevel zstd level for new {@code .linear} files (clamped 1..22)
++     * @param listener may be null (no-op); otherwise receives per-stage and retry callbacks
++     * @return summary when every file converts, validates and is deleted
++     * @throws ConversionProtectionException when any file fails 3 attempts (or a shadow-pair
++     *     escalation applies); sources are left untouched for inspection in that case
++     * @throws NullPointerException when {@code regionFolder} is null
++     */
++    public static ConversionSummary convertRegionFolder(Path regionFolder, int compressionLevel, Listener listener)
++        throws ConversionProtectionException {
++        Objects.requireNonNull(regionFolder, "regionFolder");
++        final Listener events = listener != null ? listener : new Listener() {
++            @Override
++            public void onFile(FileResult r) {}
++            @Override
++            public void onRetry(Path source, int attempt, String reason) {}
++        };
++        final int level = AbstractRegionFileFactory.clampCompressionLevel(compressionLevel);
++
++        // Crash-resume preamble, before any pool work.
++        int cleaned = cleanRecreateDirectory(regionFolder);
++        LOGGER.info("Linear conversion: cleaned " + cleaned + " orphan file(s) from new_"
++            + " staging beside " + regionFolder);
++
++        List<FileResult> preFailures = new ArrayList<>();
++        List<Path> candidates = collectCandidates(regionFolder, events, preFailures);
++
++        if (candidates.isEmpty() && preFailures.isEmpty()) {
++            return new ConversionSummary(0, 0, 0, 0, List.of());
++        }
++
++        // Bounded pool: min(availableProcessors, 4). Boot-time path with no
++        // scheduler yet, so a private fixed pool is used instead of the shared
++        // flush pool (which may not exist this early and serves a different
++        // durability contract). Four threads cap the concurrent open-file and
++        // zstd working sets during startup IO; more threads add seeks, not
++        // throughput. Daemon threads so a halted server never hangs on them;
++        // the boot thread always joins before returning (no fire-and-forget).
++        int threads = Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), 4));
++        AtomicInteger nameSeq = new AtomicInteger(0);
++        ExecutorService pool = new ThreadPoolExecutor(
++            threads,
++            threads,
++            60L,
++            TimeUnit.SECONDS,
++            new LinkedBlockingQueue<>(),
++            r -> {
++                Thread t = new Thread(r);
++                t.setName("linear-convert-" + nameSeq.incrementAndGet());
++                t.setDaemon(true);
++                return t;
++            });
++        // File tasks never submit nested pool work and never join each other;
++        // the only join edge is boot-thread -> futures, so the join cannot deadlock.
++
++        List<Future<TaskOutcome>> futures = new ArrayList<>(candidates.size());
++        for (Path source : candidates) {
++            Path target = targetForSource(source);
++            futures.add(pool.submit(new FileTask(source, target, level, events)));
++        }
++        pool.shutdown();
++
++        List<FileResult> terminal = new ArrayList<>(preFailures);
++        int converted = 0;
++        int validated = 0;
++        int deleted = 0;
++        for (int i = 0; i < futures.size(); i++) {
++            Future<TaskOutcome> f = futures.get(i);
++            TaskOutcome out;
++            try {
++                out = f.get();
++            } catch (InterruptedException e) {
++                Thread.currentThread().interrupt();
++                Path lost = candidates.get(i);
++                terminal.add(new FileResult(lost, targetForSource(lost), Status.FAILED,
++                    "interrupted while joining worker: " + String.valueOf(e.getMessage())));
++                continue;
++            } catch (Exception e) {
++                // Should not happen (tasks catch everything), but never lose a file silently:
++                // record it FAILED so it enters protection instead of vanishing.
++                Path lost = candidates.get(i);
++                terminal.add(new FileResult(lost, targetForSource(lost), Status.FAILED,
++                    "worker future failed: " + e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage())));
++                continue;
++            }
++            terminal.add(out.result());
++            if (out.result().status() == Status.DELETED) {
++                converted++;
++                validated++;
++                deleted++;
++            }
++        }
++
++        try {
++            if (!pool.awaitTermination(1L, TimeUnit.HOURS)) {
++                pool.shutdownNow();
++            }
++        } catch (InterruptedException e) {
++            Thread.currentThread().interrupt();
++            pool.shutdownNow();
++        }
++
++        List<FileResult> failures = new ArrayList<>();
++        for (FileResult r : terminal) {
++            if (r.status() == Status.FAILED) {
++                failures.add(r);
++            }
++        }
++
++        if (!failures.isEmpty()) {
++            ConversionSummary summary =
++                new ConversionSummary(converted, validated, deleted, failures.size(), List.copyOf(failures));
++            logProtectionAlert(regionFolder, summary);
++            throw new ConversionProtectionException(
++                "Linear conversion halted with " + failures.size() + " failed file(s) in " + regionFolder, summary);
++        }
++        return new ConversionSummary(converted, validated, deleted, 0, List.of());
++    }
++
++    // internal
++
++    private record TaskOutcome(FileResult result) {}
++
++    /**
++     * Listener dispatch that can never reclassify a file: a throwing observer
++     * is logged and swallowed so its exception neither escapes the worker nor
++     * changes the file's stage/outcome.
++     */
++    private static void safeOnFile(Listener events, FileResult r) {
++        try {
++            events.onFile(r);
++        } catch (RuntimeException le) {
++            LOGGER.warning("Linear conversion: listener onFile threw for " + r.source() + ": " + le);
++        }
++    }
++
++    /** Same never-throw guarantee for retry callbacks. */
++    private static void safeOnRetry(Listener events, Path source, int attempt, String reason) {
++        try {
++            events.onRetry(source, attempt, reason);
++        } catch (RuntimeException le) {
++            LOGGER.warning("Linear conversion: listener onRetry threw for " + source + ": " + le);
++        }
++    }
++
++    private static final class FileTask implements Callable<TaskOutcome> {
++        private final Path source;
++        private final Path target;
++        private final int level;
++        private final Listener events;
++
++        FileTask(Path source, Path target, int level, Listener events) {
++            this.source = source;
++            this.target = target;
++            this.level = level;
++            this.events = events;
++        }
++
++        @Override
++        public TaskOutcome call() {
++            FileState state = FileState.CONVERTING;
++            String lastError = "";
++            int attempt = 0;
++            while (shouldRetry(attempt)) {
++                attempt++;
++                try {
++                    state = FileState.CONVERTING;
++                    convertSingleFile(this.source, this.target, this.level);
++                    state = transition(state, true);
++                    safeOnFile(this.events, new FileResult(this.source, this.target, Status.CONVERTED,
++                        "attempt " + attempt + " conversion ok"));
++
++                    state = FileState.VALIDATING;
++                    String validation = validatePair(this.source, this.target);
++                    state = transition(state, true);
++                    safeOnFile(this.events, new FileResult(this.source, this.target, Status.VALIDATED,
++                        "attempt " + attempt + " validation ok: " + validation));
++
++                    state = FileState.DELETING;
++                    Files.deleteIfExists(this.source);
++                    state = transition(state, true);
++                    FileResult done = new FileResult(this.source, this.target, Status.DELETED,
++                        "converted+validated+deleted on attempt " + attempt);
++                    safeOnFile(this.events, done);
++                    return new TaskOutcome(done);
++                } catch (Exception e) {
++                    lastError = e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage());
++                    state = FileState.FAILED;
++                    cleanAttemptArtifacts(this.source, this.target);
++                    if (shouldRetry(attempt)) {
++                        safeOnRetry(this.events, this.source, attempt, lastError);
++                    }
++                }
++            }
++            FileResult failed = new FileResult(this.source, this.target, Status.FAILED,
++                "3 attempts exhausted (" + state + "); last error: " + lastError);
++            safeOnFile(this.events, failed);
++            return new TaskOutcome(failed);
++        }
++    }
++
++    /**
++     * Storage identity used only to construct region-file handles for chunk IO.
++     * The dimension is an OVERWORLD placeholder: conversion is folder-driven
++     * and the dimension never affects chunk bytes on disk. Do NOT branch folder
++     * names to dimensions here; a wrong guess would be worse than a documented
++     * constant.
++     */
++    private static RegionStorageInfo converterInfo() {
++        return new RegionStorageInfo("converter", Level.OVERWORLD, "chunk");
++    }
++
++    /**
++     * Copies all chunks from {@code source (.mca)} to {@code finalTarget (.linear)}
++     * via the sibling {@code new_<folder>} staging directory, then moves the
++     * staged file to its final name. Plain move (NOT ATOMIC_MOVE) for parity
++     * with {@code RegionStorageUpgrader.onFileFinished}: atomic moves are not
++     * guaranteed across filesystems and the existing commit path uses plain moves.
++     */
++    static void convertSingleFile(Path source, Path finalTarget, int compressionLevel) throws IOException {
++        RegionName coords = parseRegionName(source.getFileName().toString());
++        if (coords == null || !source.getFileName().toString().endsWith(AbstractRegionFileFactory.ANVIL_EXTENSION)) {
++            throw new IOException("Not a convertible .mca region file: " + source);
++        }
++        Path folder = source.getParent();
++        Path stagingDir = resolveRecreateDirectory(folder);
++        Files.createDirectories(stagingDir);
++        Path stagingTarget = stagingDir.resolve(finalTarget.getFileName().toString());
++
++        RegionStorageInfo info = converterInfo();
++        int level = AbstractRegionFileFactory.clampCompressionLevel(compressionLevel);
++
++        // Truncated-source guard (HIGH-1b): vanilla pads every region file to
++        // at least MIN_ANVIL_SIZE on first chunk write, so a nonzero file
++        // below that size was never validly written (torn header) and is
++        // treated as truncated/corrupt (FAILED path, never delete).
++        // A 0-byte file is trivially empty (created, never written: the ctor
++        // only CREATEs, header materializes on first write) and proceeds to
++        // the materialize-empty-target path. hasChunk returns false on zeroed
++        // offset tables without throwing, so without this check a truncated-
++        // but-openable .mca would count 0 and be deleted. Throw here instead:
++        // FAILED path, never delete.
++        // Checked BEFORE opening so a padding constructor cannot mask it.
++        long sourceSize = Files.size(source);
++        if (sourceSize != 0L && sourceSize < MIN_ANVIL_SIZE) {
++            throw new IOException("Source too small to hold a valid .mca header ("
++                + sourceSize + " bytes): " + source);
++        }
++
++        int copied = 0;
++        int sourceCount = 0;
++        try (AbstractRegionFile src =
++            AbstractRegionFileFactory.get(source, info, folder, false, level)) {
++            // Count EXACTLY the way the copy loop below copies (MED-1):
++            // degenerate slots (hasChunk true but null/empty payload) are
++            // skipped by the copy, so counting them here would manufacture a
++            // mismatch, burn 3 retries and halt boot. IO errors propagate.
++            sourceCount = countCopyableChunks(src, coords.x(), coords.z());
++            if (sourceCount == 0) {
++                // Empty sources still materialize a valid empty .linear target
++                // (HIGH-1a): validation requires the target to exist even for
++                // 0-chunk sources, so the source is never deleted with nothing
++                // preserved.
++                materializeEmptyTarget(stagingTarget, level,
++                    new ChunkPos(coords.x() * 32, coords.z() * 32));
++            } else {
++                try (LinearRegionFile dst = new LinearRegionFile(stagingTarget, level)) {
++                    for (int lx = 0; lx < 32; lx++) {
++                        for (int lz = 0; lz < 32; lz++) {
++                            ChunkPos pos = new ChunkPos(coords.x() * 32 + lx, coords.z() * 32 + lz);
++                            if (!src.hasChunk(pos)) {
++                                continue;
++                            }
++                            byte[] payload;
++                            try (DataInputStream in = src.getChunkDataInputStream(pos)) {
++                                if (in == null) {
++                                    continue;
++                                }
++                                payload = in.readAllBytes();
++                            }
++                            if (payload.length == 0) {
++                                continue;
++                            }
++                            dst.write(pos, ByteBuffer.wrap(payload));
++                            copied++;
++                        }
++                    }
++                    dst.flush();
++                }
++            }
++        }
++
++        if (!Files.isRegularFile(stagingTarget)) {
++            throw new IOException("Staging file missing after conversion: " + stagingTarget
++                + " (copied " + copied + " of " + sourceCount + " chunks)");
++        }
++        Files.createDirectories(finalTarget.getParent());
++        Files.move(stagingTarget, finalTarget, StandardCopyOption.REPLACE_EXISTING);
++    }
++
++    /**
++     * Materializes a valid empty {@code .linear} file (header + empty chunk
++     * table + footer) at {@code stagingTarget} for a 0-chunk source.
++     *
++     * <p>A fresh {@code LinearRegionFile} handle with zero chunks is a
++     * clean-no-op flush that leaves no file behind, so there is no "create
++     * empty file" primitive: seed one dummy chunk, flush, clear it, flush.
++     * The second flush persists while the file exists, yielding a valid empty
++     * target. Any stale staged file is removed first so older chunks cannot
++     * be resurrected into the "empty" target.</p>
++     */
++    static void materializeEmptyTarget(Path stagingTarget, int compressionLevel, ChunkPos dummy) throws IOException {
++        Files.deleteIfExists(stagingTarget);
++        int level = AbstractRegionFileFactory.clampCompressionLevel(compressionLevel);
++        try (LinearRegionFile dst = new LinearRegionFile(stagingTarget, level)) {
++            dst.write(dummy, ByteBuffer.wrap(new byte[]{0}));
++            dst.flush();
++            dst.clear(dummy);
++            dst.flush();
++        }
++        if (!Files.isRegularFile(stagingTarget)) {
++            throw new IOException("Empty-target materialization left no file: " + stagingTarget);
++        }
++    }
++
++    /**
++     * Validation predicate (existence + size + header + count parity + full
++     * payload verification).
++     *
++     * <p>Checks, in order: (a) target exists and is larger than the 40-byte
++     * header+footer minimum — required even for 0-chunk sources, which must
++     * still yield a materialized valid empty target (never "trivially valid"
++     * with nothing preserved); (b) chunk-count parity between the
++     * copy-exact source count and the target, with {@code 0 == 0} VALID;
++     * (c) target header sanity (magic, version range) plus footer magic;
++     * (d) decompress-verification of every counted target payload: header,
++     * footer and parity cannot catch a torn middle (valid framing, corrupt
++     * chunk frame), so each present chunk is fully drained. Files are small
++     * and this runs at boot: correctness over speed.</p>
++     *
++     * @return human-readable validation detail for logging
++     */
++    static String validatePair(Path source, Path target) throws IOException {
++        RegionName coords = parseRegionName(source.getFileName().toString());
++        if (coords == null) {
++            throw new IOException("Unparseable region name: " + source);
++        }
++        RegionStorageInfo info = converterInfo();
++        int sourceCount;
++        int targetCount;
++        try (AbstractRegionFile src = AbstractRegionFileFactory.get(source, info, source.getParent(), false,
++            AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL)) {
++            sourceCount = countCopyableChunks(src, coords.x(), coords.z());
++        } catch (Exception e) {
++            throw new IOException("Cannot open/count source " + source + ": " + e.getMessage(), e);
++        }
++        if (!Files.isRegularFile(target)) {
++            throw new IOException("Target missing: " + target);
++        }
++        long size = Files.size(target);
++        if (size <= MIN_VALID_SIZE) {
++            throw new IOException("Target too small (" + size + " bytes): " + target);
++        }
++        checkHeaderSanity(target);
++        try (AbstractRegionFile dst = AbstractRegionFileFactory.get(target, info, target.getParent(), false,
++            AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL)) {
++            targetCount = countChunks(dst, coords.x(), coords.z());
++            if (!countsMatch(sourceCount, targetCount)) {
++                throw new IOException("Chunk-count mismatch source=" + sourceCount + " target=" + targetCount
++                    + " for " + source.getFileName());
++            }
++            verifyTargetPayloads(dst, coords.x(), coords.z());
++        } catch (IOException e) {
++            throw e;
++        } catch (Exception e) {
++            throw new IOException("Cannot open/count target " + target + ": " + e.getMessage(), e);
++        }
++        return "chunks=" + sourceCount + " size=" + size + "B header ok, payloads verified";
++    }
++
++    /** Header/footer sanity: magic + version range + footer magic. Pure byte logic. */
++    static void checkHeaderSanity(Path target) throws IOException {
++        long size = Files.size(target);
++        try (FileChannel ch = FileChannel.open(target, StandardOpenOption.READ)) {
++            if (size < MIN_VALID_SIZE) {
++                throw new IOException("File smaller than header+footer: " + target);
++            }
++            ByteBuffer head = ByteBuffer.allocate(32);
++            head.order(ByteOrder.BIG_ENDIAN);
++            int read = 0;
++            while (head.hasRemaining()) {
++                int n = ch.read(head, read);
++                if (n < 0) {
++                    break;
++                }
++                read += n;
++            }
++            if (read < 32) {
++                throw new IOException("Truncated header in " + target);
++            }
++            head.flip();
++            long magic = head.getLong();
++            byte version = head.get();
++            if (magic != SUPERBLOCK) {
++                throw new IOException("Bad magic in " + target);
++            }
++            if (version < VERSION_MIN || version > VERSION_MAX) {
++                throw new IOException("Unsupported linear version " + version + " in " + target);
++            }
++            ByteBuffer foot = ByteBuffer.allocate(8);
++            foot.order(ByteOrder.BIG_ENDIAN);
++            int got = 0;
++            while (foot.hasRemaining()) {
++                int n = ch.read(foot, size - 8 + got);
++                if (n < 0) {
++                    break;
++                }
++                got += n;
++            }
++            if (got < 8) {
++                throw new IOException("Truncated footer in " + target);
++            }
++            foot.flip();
++            if (foot.getLong() != SUPERBLOCK) {
++                throw new IOException("Bad footer magic in " + target);
++            }
++        }
++    }
++
++    /** Counts present chunks for the region at (regionX, regionZ). */
++    static int countChunks(AbstractRegionFile file, int regionX, int regionZ) {
++        int n = 0;
++        for (int lx = 0; lx < 32; lx++) {
++            for (int lz = 0; lz < 32; lz++) {
++                if (file.hasChunk(new ChunkPos(regionX * 32 + lx, regionZ * 32 + lz))) {
++                    n++;
++                }
++            }
++        }
++        return n;
++    }
++
++    /**
++     * Copy-exact source count: a slot counts only when {@code hasChunk} is
++     * true AND its payload stream opens non-null with a non-zero read —
++     * exactly the slots the copy loop in {@link #convertSingleFile} writes.
++     * IO errors propagate (a genuinely corrupt chunk fails loudly into the
++     * FAILED path instead of converging silently).
++     */
++    static int countCopyableChunks(AbstractRegionFile src, int regionX, int regionZ) throws IOException {
++        int n = 0;
++        for (int lx = 0; lx < 32; lx++) {
++            for (int lz = 0; lz < 32; lz++) {
++                ChunkPos pos = new ChunkPos(regionX * 32 + lx, regionZ * 32 + lz);
++                if (!src.hasChunk(pos)) {
++                    continue;
++                }
++                byte[] payload;
++                try (DataInputStream in = src.getChunkDataInputStream(pos)) {
++                    if (in == null) {
++                        continue;
++                    }
++                    payload = in.readAllBytes();
++                }
++                if (payload.length == 0) {
++                    continue;
++                }
++                n++;
++            }
++        }
++        return n;
++    }
++
++    /**
++     * Decompress-verifies every present target payload for the region at
++     * (regionX, regionZ): each counted chunk's stream must open non-null,
++     * drain fully and yield non-zero bytes. Null streams, empty reads and
++     * decompression errors (torn middle with valid framing) fail validation.
++     */
++    static void verifyTargetPayloads(AbstractRegionFile dst, int regionX, int regionZ) throws IOException {
++        for (int lx = 0; lx < 32; lx++) {
++            for (int lz = 0; lz < 32; lz++) {
++                ChunkPos pos = new ChunkPos(regionX * 32 + lx, regionZ * 32 + lz);
++                if (!dst.hasChunk(pos)) {
++                    continue;
++                }
++                DataInputStream opened = dst.getChunkDataInputStream(pos);
++                if (opened == null) {
++                    throw new IOException("Target chunk " + pos + " has no readable payload (torn write?)");
++                }
++                byte[] payload;
++                try (DataInputStream in = opened) {
++                    payload = in.readAllBytes();
++                } catch (IOException e) {
++                    throw new IOException(
++                        "Target chunk " + pos + " payload unreadable (torn write?): " + e.getMessage(), e);
++                }
++                if (payload.length == 0) {
++                    throw new IOException("Target chunk " + pos + " has empty payload (torn write?)");
++                }
++            }
++        }
++    }
++
++    /** Parity rule: equal counts; 0 == 0 is explicitly VALID (trivially empty file). */
++    static boolean countsMatch(int sourceCount, int targetCount) {
++        return sourceCount == targetCount;
++    }
++
++    /** Retry rule: attempts are 1-based; attempts 1..2 may retry, attempt 3 is terminal. */
++    static boolean shouldRetry(int completedAttempts) {
++        return completedAttempts < MAX_ATTEMPTS;
++    }
++
++    /** State-machine step. Package-visible pure logic for unit tests. */
++    static FileState transition(FileState current, boolean stageSuccess) {
++        if (!stageSuccess) {
++            return FileState.FAILED;
++        }
++        return switch (current) {
++            case CONVERTING -> FileState.CONVERTED;
++            case CONVERTED -> FileState.VALIDATING;
++            case VALIDATING -> FileState.VALIDATED;
++            case VALIDATED -> FileState.DELETING;
++            case DELETING -> FileState.DELETED;
++            default -> current;
++        };
++    }
++
++    /**
++     * Deletes leftover staging plus the partial final target between attempts.
++     * Best-effort: a torn final target must never linger where a later crash
++     * could mistake it for a finished conversion. The source is never touched.
++     */
++    static void cleanAttemptArtifacts(Path source, Path target) {
++        try {
++            Path staging = resolveRecreateDirectory(source.getParent()).resolve(target.getFileName().toString());
++            Files.deleteIfExists(staging);
++            Files.deleteIfExists(target);
++        } catch (Exception ignored) {
++        }
++    }
++
++    /**
++     * Crash-resume step (a): delete orphan {@code new_<folder>} content left by a
++     * crashed run. Crash-before-move is safe to retry (source intact, fragment
++     * ignored); without this cleanup a stale staged file could be mistaken for
++     * fresh work on the next attempt.
++     *
++     * @return number of deleted entries
++     */
++    static int cleanRecreateDirectory(Path regionFolder) {
++        Path staging = resolveRecreateDirectory(regionFolder);
++        if (!Files.isDirectory(staging)) {
++            return 0;
++        }
++        int removed = 0;
++        try (DirectoryStream<Path> ds = Files.newDirectoryStream(staging)) {
++            List<Path> entries = new ArrayList<>();
++            for (Path p : ds) {
++                entries.add(p);
++            }
++            for (Path p : entries) {
++                try {
++                    if (Files.isDirectory(p)) {
++                        try (java.util.stream.Stream<Path> walk = Files.walk(p)) {
++                            List<Path> all = walk.sorted(Comparator.reverseOrder()).toList();
++                            for (Path q : all) {
++                                Files.deleteIfExists(q);
++                                removed++;
++                            }
++                        }
++                    } else {
++                        Files.deleteIfExists(p);
++                        removed++;
++                    }
++                } catch (IOException ignored) {
++                }
++            }
++        } catch (IOException ignored) {
++        }
++        return removed;
++    }
++
++    /**
++     * Crash-resume step (b): collect conversion candidates and resolve shadow pairs.
++     *
++     * <p>Shadow policy: the live dual-read prefers {@code .mca}, so a
++     * {@code .mca + .linear} pair with the same coordinates can only be a crash
++     * remnant (live conversion deletes sources post-validation) or operator
++     * action. A {@code .linear} shadow that FAILS validation is an orphan:
++     * delete it and requeue the {@code .mca} for conversion (escalating instead
++     * when the source itself is unreadable, so a corrupt source is never
++     * destroyed). A shadow that VALIDATES is NEVER auto-deleted: after a
++     * one-way downgrade both sides can hold unique chunks at equal counts, and
++     * count-parity validation cannot prove the shadow redundant. Valid-shadow
++     * pairs escalate to FAILED / protection with neither side deleted; the
++     * operator compares chunk contents before touching either file.</p>
++     */
++    static List<Path> collectCandidates(Path regionFolder, Listener events, List<FileResult> preFailures) {
++        Map<String, Path> mca = new HashMap<>();
++        Map<String, Path> lin = new HashMap<>();
++        try (DirectoryStream<Path> ds = Files.newDirectoryStream(regionFolder)) {
++            for (Path p : ds) {
++                if (!Files.isRegularFile(p)) {
++                    continue;
++                }
++                Matcher m = REGION_NAME.matcher(p.getFileName().toString());
++                if (!m.matches()) {
++                    continue;
++                }
++                String key = m.group(1) + "," + m.group(2);
++                String ext = m.group(3);
++                if ("mca".equals(ext)) {
++                    mca.put(key, p);
++                } else {
++                    lin.put(key, p);
++                }
++            }
++        } catch (IOException e) {
++            LOGGER.warning("Linear conversion: cannot list " + regionFolder + ": " + e.getMessage());
++            return List.of();
++        }
++
++        List<Path> out = new ArrayList<>();
++        for (Map.Entry<String, Path> e : mca.entrySet()) {
++            Path source = e.getValue();
++            Path shadow = lin.get(e.getKey());
++            if (shadow == null) {
++                out.add(source);
++                continue;
++            }
++            // Shadow pair: .mca wins the dual-read, so the .linear is suspect.
++            Path target = targetForSource(source);
++            boolean targetValid;
++            try {
++                validatePair(source, shadow);
++                targetValid = true;
++            } catch (Exception invalid) {
++                targetValid = false;
++            }
++            if (targetValid) {
++                // NEVER auto-delete a valid shadow. One-way-downgrade caveat:
++                // a post-downgrade pair can hold UNIQUE chunks on both sides at
++                // equal counts, so count parity cannot prove the shadow
++                // redundant and deleting it could destroy the only copy of some
++                // chunks. Escalate to protection with NEITHER side deleted; the
++                // operator compares chunk contents before touching either file.
++                preFailures.add(new FileResult(source, target, Status.FAILED,
++                    "shadow pair: valid .linear shadow beside readable source; one-way downgrade may leave"
++                        + " unique chunks on either side (count parity cannot prove redundancy);"
++                        + " both files left untouched for operator comparison"));
++                LOGGER.severe("Linear conversion: valid shadow pair left untouched for inspection: source="
++                    + source + " shadow=" + shadow);
++                continue;
++            }
++            // Orphan target is invalid: drop it and requeue the source.
++            // If the source itself is corrupt, conversion attempts will fail
++            // 3x and enter protection there (nothing deleted meanwhile).
++            boolean sourceReadable;
++            try {
++                RegionStorageInfo info = converterInfo();
++                try (AbstractRegionFile src = AbstractRegionFileFactory.get(
++                    source, info, source.getParent(), false,
++                    AbstractRegionFileFactory.DEFAULT_COMPRESSION_LEVEL)) {
++                    RegionName coords = parseRegionName(source.getFileName().toString());
++                    countChunks(src, coords.x(), coords.z());
++                }
++                sourceReadable = true;
++            } catch (Exception corrupt) {
++                sourceReadable = false;
++            }
++            if (!sourceReadable) {
++                // Source unreadable; shadow left untouched for inspection:
++                // conversion cannot succeed, so escalate now rather than
++                // burning 3 doomed attempts. Neither side is deleted.
++                preFailures.add(new FileResult(source, target, Status.FAILED,
++                    "shadow pair: source unreadable; shadow left untouched for inspection"));
++                LOGGER.severe("Linear conversion: shadow pair with corrupt source left untouched: " + source);
++                continue;
++            }
++            try {
++                Files.deleteIfExists(shadow);
++                LOGGER.info("Linear conversion: removed invalid shadow " + shadow.getFileName()
++                    + "; requeueing " + source.getFileName());
++            } catch (IOException deleteFail) {
++                preFailures.add(new FileResult(source, target, Status.FAILED,
++                    "shadow pair: cannot remove invalid orphan target " + shadow + ": " + deleteFail.getMessage()));
++                continue;
++            }
++            out.add(source);
++        }
++        // Already-converted (.linear-only) files are reported as SKIPPED for visibility.
++        for (Map.Entry<String, Path> e : lin.entrySet()) {
++            if (!mca.containsKey(e.getKey())) {
++                Path t = e.getValue();
++                Path pseudoSource = t.resolveSibling(
++                    t.getFileName().toString().substring(0, t.getFileName().toString().length() - ".linear".length())
++                        + AbstractRegionFileFactory.ANVIL_EXTENSION);
++                safeOnFile(events, new FileResult(pseudoSource, t, Status.SKIPPED, "already converted; no source"));
++            }
++        }
++        // No lock file is used: conversion runs exactly once on the single boot
++        // thread before worlds load, so no second converter can race it. A lock
++        // file would itself need crash-resume (stale-lock detection), adding
++        // failure modes for no concurrency benefit.
++        return out;
++    }
++
++    static Path targetForSource(Path source) {
++        String name = source.getFileName().toString();
++        if (name.endsWith(AbstractRegionFileFactory.ANVIL_EXTENSION)) {
++            name = name.substring(0, name.length() - AbstractRegionFileFactory.ANVIL_EXTENSION.length())
++                + AbstractRegionFileFactory.LINEAR_EXTENSION;
++        } else {
++            name = name + AbstractRegionFileFactory.LINEAR_EXTENSION;
++        }
++        return source.resolveSibling(name);
++    }
++
++    static Path resolveRecreateDirectory(Path directoryPath) {
++        return directoryPath.resolveSibling(NEW_DIRECTORY_PREFIX + directoryPath.getFileName().toString());
++    }
++
++    private record RegionName(int x, int z) {}
++
++    static RegionName parseRegionName(String fileName) {
++        Matcher m = REGION_NAME.matcher(fileName);
++        if (!m.matches()) {
++            return null;
++        }
++        try {
++            return new RegionName(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
++        } catch (NumberFormatException e) {
++            return null;
++        }
++    }
++
++    /**
++     * Protection-mode terminal alert: highly descriptive, operator-actionable.
++     * Sources are never deleted before validation, so every failed file still
++     * has its original {@code .mca} in place plus whatever partial target was
++     * left. Conversion resumes automatically on the next boot since unconverted
++     * sources remain. No halt/exit here: the caller (B2) decides to halt.
++     */
++    static void logProtectionAlert(Path regionFolder, ConversionSummary summary) {
++        StringBuilder sb = new StringBuilder();
++        sb.append("============================================================\n");
++        sb.append("LINEAR CONVERSION PROTECTION MODE\n");
++        sb.append("============================================================\n");
++        sb.append("Folder: ").append(regionFolder.toAbsolutePath()).append("\n");
++        sb.append("Converted=").append(summary.converted())
++            .append(" Validated=").append(summary.validated())
++            .append(" Deleted=").append(summary.deleted())
++            .append(" Failed=").append(summary.failed()).append("\n");
++        sb.append("Guarantee: sources are NEVER deleted before validation passes.\n");
++        sb.append("All failed files below still have their original .mca in place.\n");
++        sb.append("Partial .linear targets (if any) were left beside the source.\n");
++        sb.append("------------------------------------------------------------\n");
++        for (FileResult f : summary.failures()) {
++            sb.append("FAILED source=").append(f.source())
++                .append(" target=").append(f.target())
++                .append(" detail=").append(f.detail()).append("\n");
++        }
++        sb.append("------------------------------------------------------------\n");
++        sb.append("Operator next steps:\n");
++        sb.append(" 1. Inspect each FAILED source above (file size, readability,\n");
++        sb.append("    disk space, permissions). Common causes: corrupt region\n");
++        sb.append("    header, truncated chunk, full disk, read-only mount.\n");
++        sb.append(" 2. Restore the file from backup, or free disk / fix perms.\n");
++        sb.append(" 3. Do NOT manually delete .mca files; re-run the server and\n");
++        sb.append("    conversion resumes automatically (unconverted sources remain).\n");
++        sb.append(" 4. If a .linear shadow exists beside a failed .mca (shadow-pair\n");
++        sb.append("    escalation), compare chunk CONTENTS before touching either file:\n");
++        sb.append("    equal counts do not prove redundancy after a one-way downgrade.\n");
++        sb.append("Server halts for inspection (caller halts on this exception).\n");
++        sb.append("============================================================");
++        LOGGER.severe(sb.toString());
++    }
++}
+-- 
+2.43.0

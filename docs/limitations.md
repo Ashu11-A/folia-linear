@@ -9,8 +9,8 @@ What this release does not cover. Read it before a rollout, not after.
   p99, not on cold-start numbers: page-cache misses and zstd warmup make the
   first minutes look worse than steady state.
 - **Live flush cost at high compression levels.** Level 22 has clean boots and a
-  clean `save-all` behind it, but no long soak. Level 1 is the default for that
-  reason.
+  clean `save-all` behind it, but no long soak. Level 9 is the shipped default;
+  multi-day soak cost above it is still unmeasured.
 - **Shutdown flush duration.** One paired sample showed Linear taking 1.8 s
   longer to shut down. Single sample, unconfirmed.
 
@@ -36,12 +36,12 @@ What this release does not cover. Read it before a rollout, not after.
 - `region-format.linear.flush-frequency`, `region-format.linear.flush-max-threads`,
   `region-format.linear.compression-workers`,
   `region-format.linear.long-distance-matching` and
-  `region-format.linear.log-flush-batches` are declared and validated but read
-  by nothing at their defaults. No scheduler or thread pool is wired to them
-  yet (`paper-0012` adds the last three with inert defaults: `0`, `0`/`off`,
-  `false`). Tuning them is a silent no-op while defaults hold
+  `region-format.linear.log-flush-batches` are declared and validated. All but
+  `log-flush-batches` are wired at their defaults: the flush pool, the
+  age-based flusher and the zstd workers all read them
   (`flush-max-threads <= 1` stays serial, `compression-workers: 0` stays
-  serial, LDM `0` stays off, log `false` stays warn-only). See
+  serial, LDM `0` stays off, log `false` stays warn-only). Only batch logging
+  is still a silent no-op. New worlds ship `LINEAR` at level 9. See
   [configuration.md](configuration.md).
 
 ## Rollback
