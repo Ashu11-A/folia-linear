@@ -115,3 +115,16 @@ Do not represent these as covered.
   converted tree.
 
 Full list: [../docs/limitations.md](../docs/limitations.md).
+
+## 5. Async periodic drain
+
+- Periodic drains (`flushDirtyAsync(false)` from unload/autosave paths)
+  submit to the shared `linear-flush-*` pool and return without
+  joining; the tick thread never blocks on file rewrites.
+- Crash-loss window: up to one `flush-frequency` window (default 10 s:
+  ~10 s of writes per file plus the single in-flight task).
+- Clean shutdown is zero-loss: stop paths (`evictAll`, forced
+  `flushAllDirty(true)`) remain synchronous joining barriers.
+- On stop the pool uses `shutdown()` (never `shutdownNow()`) with a
+  30 s await; in-flight tasks complete a torn write rather than
+  being interrupted mid-image-rewrite.
