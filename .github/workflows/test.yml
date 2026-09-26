@@ -123,6 +123,10 @@ jobs:
           git config --global user.name "folia-linear-ci"
           git config --global user.email "folia-linear-ci@users.noreply.github.com"
 
+      - name: Apply patches (paperweight wires test dependencies here)
+        working-directory: folia
+        run: ./gradlew applyAllPatches --stacktrace
+
       - name: Preflight --compile gate (exact invocation from scripts/preflight.sh)
         run: bash supplement/scripts/preflight.sh --folia-dir "$GITHUB_WORKSPACE/folia" --compile
 
