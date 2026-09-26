@@ -105,6 +105,9 @@ jobs:
       #          at the exact FOLIA_REF into ./folia, copy minecraft/paper
       #          patches, run build-hunk.py, copy tests. Input: version.
       #          Loops internally over every versions/*/ folder.
+      - name: Checkout (bootstrap for local composite actions below)
+        uses: actions/checkout@v4
+
       - name: Setup (checkout + Java + gradle cache)
         uses: ./.github/actions/setup
         with:
