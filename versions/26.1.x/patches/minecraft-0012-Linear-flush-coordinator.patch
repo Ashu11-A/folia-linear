@@ -123,7 +123,7 @@ index 0d5c55b..c1bf0b4 100644
              coordinator.recordEvict(); // Linear: evict count (lock-free)
          }
      }
-@@ -76,9 +108,150 @@ public final class LinearFlushCoordinator {
+@@ -76,9 +108,352 @@ public final class LinearFlushCoordinator {
          return folder.toAbsolutePath().normalize().toString();
      }
  
@@ -257,6 +257,208 @@ index 0d5c55b..c1bf0b4 100644
 +        }
 +    }
 +
++    // Linear - in-flight async batch tracking (async-split correctness net, B-RC).
++    // An async task holds files ALREADY REMOVED from the dirty set, so a later
++    // forced flush or evictAll would neither see nor wait for them. Every
++    // submitted batch registers here and removes itself in the task finally;
++    // the sync barriers (flushDirty(true), evictAll) join this set before
++    // returning, so a clean stop stays zero-loss. DEADLOCK-FREE: the set is a
++    // lock-free ConcurrentHashMap-backed set; joining takes NO lock (neither
++    // the coordinator monitor nor FLUSH_POOL_LOCK) while blocked in
++    // Future.get, and pool threads touch the set only via non-blocking
++    // add/remove. The only lock pool threads can need is the brief
++    // coordinator-monitor section in flushOne's failure re-queue, which the
++    // join path never holds while waiting, so a gated/slow batch always
++    // completes.
++    private static final java.util.Set<java.util.concurrent.Future<?>> IN_FLIGHT_ASYNC =
++        java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
++
++    /**
++     * Linear - async fire-and-forget drain for periodic (non-forced) flushes.
++     * Submits the snapshot batch as one ordered task on the shared pool and
++     * returns immediately without joining (tick never blocks). The pool is
++     * ensured with a minimum of 1 thread, independent of the serial gate in
++     * {@code flushDirty}: config 1 yields a single-thread ordered off-tick
++     * drain, config >1 reuses the current shared pool. The flush-sync bridge
++     * event fires post-completion inside the task with the same counts as the
++     * joining path. Pool-create/submit failure falls back to inline execution
++     * so durability is never dropped. The batch registers in
++     * {@code IN_FLIGHT_ASYNC} (FutureTask created BEFORE submit and added
++     * BEFORE execute, so no complete-before-track race) and unregisters in
++     * the task finally, so the sync barriers can join it.
++     */
++    private void linear$flushDirtyAsync(final java.util.List<AbstractRegionFile> snapshot) {
++        final long batchStartNanos = System.nanoTime();
++        final int filesAttempted = snapshot.size();
++        final String folderKey = key(this.folder);
++        // Self-unregistering holder: the array cell is assigned before any
++        // submit/inline path, so the task finally never sees a null entry
++        // (remove of an unregistered task is a no-op, never throws).
++        final java.util.concurrent.FutureTask<?>[] holder = new java.util.concurrent.FutureTask<?>[1];
++        final Runnable task = () -> {
++            try {
++                for (AbstractRegionFile file : snapshot) {
++                    this.flushOne(file);
++                }
++            } finally {
++                final long elapsedMicros = (System.nanoTime() - batchStartNanos) / 1000L;
++                try {
++                    io.papermc.paper.linear.LinearFlushBridge.notifyFlushSync(
++                        folderKey, filesAttempted, elapsedMicros);
++                } catch (RuntimeException | LinkageError ignored) {
++                    // Tests without Bukkit, or Paper bridge absent: event stays
++                    // silent, durability already complete in the task above.
++                }
++                IN_FLIGHT_ASYNC.remove(holder[0]);
++            }
++        };
++        holder[0] = new java.util.concurrent.FutureTask<Void>(task, null);
++        final java.util.concurrent.ExecutorService pool;
++        try {
++            pool = linear$sharedPool(Math.max(1, linear$resolveFlushThreads()));
++        } catch (RuntimeException poolFailed) {
++            // Pool-create fallback: run inline so durability is not lost.
++            task.run();
++            return;
++        }
++        IN_FLIGHT_ASYNC.add(holder[0]);
++        try {
++            pool.execute(holder[0]);
++        } catch (RuntimeException submitFailed) {
++            // Queue/reject fallback: untrack and run inline so durability is
++            // not lost.
++            IN_FLIGHT_ASYNC.remove(holder[0]);
++            task.run();
++        }
++    }
++
++    /**
++     * Linear - joins every in-flight async batch (sync-barrier net, B-RC).
++     * Snapshots the set and blocks in Future.get WITHOUT holding any lock
++     * (see IN_FLIGHT_ASYNC discipline above), so pool threads always make
++     * progress. Repeats while new batches arrive mid-join; terminates because
++     * the forced barrier drains everything, leaving follow-up periodic
++     * snapshots empty (no new submissions). Log-never-throw: per-batch
++     * failures were already logged/counted by flushOne; interrupt status is
++     * preserved, never propagated.
++     */
++    static void linear$joinInFlightAsync() {
++        boolean interrupted = false;
++        while (true) {
++            java.util.List<java.util.concurrent.Future<?>> batch =
++                new java.util.ArrayList<>(IN_FLIGHT_ASYNC);
++            if (batch.isEmpty()) {
++                break;
++            }
++            for (java.util.concurrent.Future<?> future : batch) {
++                while (true) {
++                    try {
++                        future.get();
++                        break;
++                    } catch (InterruptedException ie) {
++                        // Keep waiting (do NOT truncate the barrier); the flag
++                        // is restored once the join completes below.
++                        interrupted = true;
++                    } catch (java.util.concurrent.ExecutionException ee) {
++                        break;
++                    } catch (RuntimeException re) {
++                        break;
++                    }
++                }
++            }
++        }
++        if (interrupted) {
++            Thread.currentThread().interrupt();
++        }
++    }
++
++    /**
++     * Linear - static fire-and-forget drain across every tracked folder
++     * (async split, B-RC). Periodic call sites (unload pass, autosave) submit
++     * the age-eligible snapshot per folder and return WITHOUT joining, so the
++     * tick never blocks. {@code force} mirrors flushDirty snapshot semantics
++     * (forced takes all ages, else age-gated); submission is always async.
++     * Per-folder failures are logged, never thrown.
++     */
++    public static void flushDirtyAsync(boolean force) {
++        final long now = System.nanoTime();
++        final long frequencyNanos;
++        if (force) {
++            frequencyNanos = 0L;
++        } else {
++            long seconds = linear$resolveFlushFrequencySeconds();
++            if (seconds < 0L) {
++                seconds = 10L;
++            }
++            frequencyNanos = seconds * 1_000_000_000L;
++        }
++        for (String folderKey : new ArrayList<>(BY_FOLDER.keySet())) {
++            try {
++                LinearFlushCoordinator coordinator = BY_FOLDER.get(folderKey);
++                if (coordinator == null) {
++                    continue;
++                }
++                final java.util.List<AbstractRegionFile> batch;
++                synchronized (coordinator) {
++                    if (coordinator.dirty.isEmpty()) {
++                        continue;
++                    }
++                    if (force) {
++                        batch = new ArrayList<>(coordinator.dirty.keySet());
++                        coordinator.dirty.clear();
++                    } else {
++                        batch = new ArrayList<>();
++                        java.util.Iterator<java.util.Map.Entry<AbstractRegionFile, Long>> it =
++                            coordinator.dirty.entrySet().iterator();
++                        while (it.hasNext()) {
++                            java.util.Map.Entry<AbstractRegionFile, Long> e = it.next();
++                            if (now - e.getValue() >= frequencyNanos) {
++                                batch.add(e.getKey());
++                                it.remove();
++                            }
++                        }
++                        if (batch.isEmpty()) {
++                            continue;
++                        }
++                    }
++                }
++                coordinator.linear$flushDirtyAsync(batch);
++            } catch (RuntimeException e) {
++                LOGGER.error("Failed to flush linear folder {}", folderKey, e);
++            }
++        }
++    }
++
++    /**
++     * Linear - production pool shutdown for the stop path (async split, B-RC).
++     * Called after the joining stop drain. Uses shutdown() (NEVER shutdownNow:
++     * an in-flight task must complete a torn image rewrite, not die mid-write)
++     * plus a bounded 30s awaitTermination, then log-and-return. Idempotent (a
++     * second call finds the pool already shut down) and never throws.
++     * FLUSH_POOL_LOCK is held only to snapshot the reference; the await runs
++     * OUTSIDE the lock so pool creation can never block on shutdown.
++     */
++    public static void shutdownFlushPool() {
++        final java.util.concurrent.ExecutorService pool;
++        synchronized (FLUSH_POOL_LOCK) {
++            pool = FLUSH_POOL;
++        }
++        if (pool == null) {
++            return;
++        }
++        try {
++            pool.shutdown();
++            if (!pool.awaitTermination(30L, java.util.concurrent.TimeUnit.SECONDS)) {
++                LOGGER.warn("Linear flush pool did not terminate within 30s; stragglers retry next start via dirty-file replay");
++            }
++        } catch (InterruptedException ie) {
++            Thread.currentThread().interrupt();
++            LOGGER.warn("Interrupted while awaiting linear flush pool termination", ie);
++        } catch (RuntimeException e) {
++            LOGGER.warn("Failed to shut down linear flush pool", e);
++        }
++    }
++
      private final Path folder;
 -    /** Insertion-ordered identity set; guarded by {@code this}. */
 -    private final LinkedHashSet<AbstractRegionFile> dirty = new LinkedHashSet<>();
@@ -328,7 +530,7 @@ index 0d5c55b..c1bf0b4 100644
              }
          }
          // Linear: markDirty count outside sync (lock-free).
-@@ -142,23 +346,138 @@ public final class LinearFlushCoordinator {
+@@ -142,23 +346,149 @@ public final class LinearFlushCoordinator {
          if (eldest != null) {
              this.flushOne(eldest);
          }
@@ -350,6 +552,13 @@ index 0d5c55b..c1bf0b4 100644
 +     * (evict/unload) flushes everything regardless of age.
 +     */
 +    void flushDirty(boolean force) {
++        // Linear - pre-barrier net (B-RC): join in-flight async batches BEFORE
++        // the empty check. An async batch holds files already removed from the
++        // dirty set, so isEmpty() would lie without this join. Lock-free join
++        // (see IN_FLIGHT_ASYNC discipline); only the forced path pays it.
++        if (force) {
++            linear$joinInFlightAsync();
++        }
          if (this.isEmpty()) {
              return;
          }
@@ -470,6 +679,10 @@ index 0d5c55b..c1bf0b4 100644
 +                // silent, durability already complete (barrier joined above).
 +            }
          }
++        // Linear - post-barrier net (B-RC): the static fire-and-forget path
++        // may have submitted an async batch while the forced barrier ran;
++        // join it so the barrier never returns with an async batch in flight.
++        linear$joinInFlightAsync();
      }
  
 @@ -171,6 +490,14 @@ public final class LinearFlushCoordinator {
