@@ -4,7 +4,7 @@ The fork exposes Linear I/O counters three ways: a command, an event, and a
 Paper API delegate. All of it is read-only instrumentation. It adds no config
 keys, changes no behaviour, and records nothing on the Anvil path.
 
-## `/linearstats` (paper-0013 Adventure panel)
+## `/linearstats` (paper-0009 Adventure panel)
 
 - No arguments, and tab completion is empty.
 - Permission `linear.command.linearstats`, OP by default. It is mirrored from
@@ -19,7 +19,7 @@ keys, changes no behaviour, and records nothing on the Anvil path.
 
 Output shape (coloured, aligned; per-world `region|poi|entities` sections):
 
-```
+```text
 Linear stats (N folders)
 <world>  lvl <level>  last flush <age> / never flushed
   [region]   r=N (avg Nus) w=N (avg Nus) f=N (avg Nus) l=N
@@ -48,10 +48,10 @@ Data is pulled on demand from `LinearFlushCoordinator.snapshots()` and
 `RegionFileStorage#linear$stats()`. Nothing is pushed or buffered for the
 command.
 
-## Loop-4 measurements (`minecraft-0015`, wired to the panel in `paper-0013`)
+## Measurements (`minecraft-0010`, wired to the panel in `paper-0009`)
 
 `LinearFolderSnapshot` carries lock-free measurements the legacy command hid;
-`paper-0013` wires them to the display (no counter gap, display only):
+`paper-0009` wires them to the display (no counter gap, display only):
 
 - `rawBytes` / `compressedBytes`: summed flush image bytes (uncompressed vs
   zstd) across actual I/O flushes. Ratio estimates live savings without a
@@ -61,7 +61,7 @@ command.
   same as `flush.count`.
 - `millisSinceLastFlush`: wall ms since the last successful folder flush
   (`-1` when never flushed). Answers "is this folder stalled?" without logs.
-- `markDirty`, `cacheHits`/`cacheMisses`: S8 blind-spot fix. An absent snapshot
+- `markDirty`, `cacheHits`/`cacheMisses`: an absent snapshot
   entry means "never invoked" (no Linear I/O yet for that folder); a present
   entry with zero counts means "empty set" (invoked but idle). `/linearstats`
   shows "no folders tracked" for the former; check `markDirty`/`cache*` to
@@ -70,24 +70,21 @@ command.
 All five use `LongAdder`/`LongAccumulator` only, no `synchronized` on hot
 paths, no threads, no pool re-cut of `recordFlush`.
 
-## `LinearRegionFlushCompletedEvent` (wired in paper-0013 + minecraft-0019)
+## `LinearRegionFlushCompletedEvent` (wired in paper-0009 + minecraft-0012)
 
 `org.bukkit.event.world.LinearRegionFlushCompletedEvent`.
 
 - **Async by contract.** It is constructed with `super(true)`. The async entry
   (`LinearFlushBridge#notifyFlush(Plugin,…)`) schedules off the I/O threads
   through the async scheduler; the server-internal entry
-  (`#notifyFlushSync(…)`, paper-0013, no Plugin) fires sync on the save thread
-  right after `flushDirty()` drains (NMS call site in minecraft-0019, same
-  PATCH8). Listeners still observe async semantics (must not touch world state;
+  (`#notifyFlushSync(…)`, paper-0009, no Plugin) fires sync on the save thread
+  right after `flushDirty()` drains (NMS call site in minecraft-0012). Listeners still observe async semantics (must not touch world state;
   schedule back through the region scheduler if needed).
 - Granularity is one event per coordinator `flushDirty()` that attempted at
   least one file. A flush cycle with nothing dirty (or nothing old enough for
   the age gate) fires nothing, so an idle server producing no events is correct.
 - Carries `worldName`, `folderType` (`region`, `poi` or `entities`) and a
   post-flush totals snapshot as primitives.
-- Listeners run async and must not touch world state directly. Schedule back
-  through the region scheduler if you need to.
 
 ```java
 @EventHandler
@@ -110,25 +107,24 @@ counters without importing anything from `net.linear`.
 - Averages are computed as total divided by count, guarded against division by
   zero.
 
-## Wiring the event (done in PATCH8)
+## Wiring the event
 
-- `LinearFlushBridge#notifyFlushSync(String, long, long)` (paper-0013, no
+- `LinearFlushBridge#notifyFlushSync(String, long, long)` (paper-0009, no
   Plugin) is called right after `LinearFlushCoordinator.flushDirty()` drains
-  (NMS call site in minecraft-0019, same PATCH8 work; `filesAttempted` is the
+  (NMS call site in minecraft-0012; `filesAttempted` is the
   snapshot size, `elapsedMicros` spans the durability barrier). Clean-no-ops
   (`<1` attempted, or nothing old enough for the age gate) fire nothing.
 - `LinearFlushBridge#notifyFlush(Plugin, String, long, long)` (async) remains
   for Paper-side callers with an owning Plugin (Folia-safe off-IO delivery);
   the old `getProvidingPlugin` misuse stays fixed via explicit param.
-- Until PATCH8, `/linearstats` and the API delegate worked (pull) but the event
-  stayed silent (no call site). After PATCH8 it fires.
+- Before the v1.1.0 bridge call site, `/linearstats` and the API delegate worked (pull) but the event stayed silent (no call site).
 
 ## Troubleshooting
 
 - **No rows, but `.linear` files exist.** The counters only populate on actual
   Linear I/O. Trigger a save cycle, then check again.
 - **Event never fires.** Either nothing is dirty/old enough (age gate), or the
-  bridge call site is missing (pre-PATCH8 builds). Confirm with `/linearstats`
+  bridge call site is missing (pre-v1.1.0 builds). Confirm with `/linearstats`
   that flushes are being counted.
 - **`folderType` shows `region` for `poi/` or `entities/`.** The inference in
   `LinearFolderNames` reads the absolute folder-path suffix; a
@@ -137,9 +133,9 @@ counters without importing anything from `net.linear`.
 
 ## Tests
 
-- `tests/LinearTimingInstrumentationTest.java` covers the counters: empty state,
+- `versions/26.1.x/tests/LinearTimingInstrumentationTest.java` covers the counters: empty state,
   write and flush counts, reopen and read, monotonicity, reset.
-- `tests/LinearStatsCommandTest.java` covers the readout: snapshot aggregation,
+- `versions/26.1.x/tests/LinearStatsCommandTest.java` covers the readout: snapshot aggregation,
   per-file deltas, batch equality, failures tightening `filesFlushed`, clean
   no-op behaviour, panel-data wiring (`rawBytes`/`compressedBytes`/`p50`/`p99`/
   `millisSince`/`dirtyDepth` all present for the Adventure panel), and the

@@ -1,8 +1,8 @@
 # Configuration reference
 
-Every setting the Linear patches add lives under a `region-format` block. Two of
-them sit in the world config, six in the global config. The README covers the
-two you will actually tune; this page is the full surface, including what the
+Every setting the Linear patches add lives under a `region-format` block. Three
+sit in the world config, five in the global config. The README covers the
+two you will actually tune. Full surface below, including what the
 server does with a bad value.
 
 ## Key map
@@ -19,8 +19,8 @@ server does with a bad value.
 | `region-format.linear.log-flush-batches` | `paper-global.yml` | server | bool | `false` |
 
 The world keys are defined in `WorldConfiguration`, the global ones in
-`GlobalConfiguration`, both in `patches/paper-0008-*.patch` (global inert keys
-extended by `paper-0012`).
+`GlobalConfiguration`, both in `patches/paper-0008-*.patch`. All but
+`log-flush-batches` are wired at their defaults (see below).
 
 ## Placement
 
@@ -73,10 +73,10 @@ region-format:
 - Does not affect the in-memory hot path. Chunks are staged LZ4-compressed as
   they are written and only re-encoded with zstd at flush time.
 - Validated and clamped in three places, so a bad value cannot reach the codec:
-1. `@PostProcess` in `WorldConfiguration`: logs and resets to 9.
-2. `AbstractRegionFileFactory.clampCompressionLevel`: returns
-   `DEFAULT_COMPRESSION_LEVEL` (9) outside `1..MAX_COMPRESSION_LEVEL` (22).
-  3. The `LinearRegionFile` constructor: `Math.max(1, Math.min(22, level))`.
+  - `@PostProcess` in `WorldConfiguration`: logs and resets to 9.
+  - `AbstractRegionFileFactory.clampCompressionLevel`: returns
+    `DEFAULT_COMPRESSION_LEVEL` (9) outside `1..MAX_COMPRESSION_LEVEL` (22).
+  - The `LinearRegionFile` constructor: `Math.max(1, Math.min(22, level))`.
 - The level is recorded as one byte in the file header, but only for
   information. Decoding never reads it, so raising or lowering the setting needs
   no conversion pass. Existing files are rewritten at the new level whenever they
@@ -128,52 +128,49 @@ region-format:
     log-flush-batches: false
 ```
 
-- `flush-frequency` (default 10s) is REAL since `minecraft-0017`: `flushDirty()`
-  flushes only files whose first-dirty age is `>=` frequency; younger files stay
-  tracked for the next save. Eviction (`close()`) forces all regardless of age;
-  bound-pressure flush ignores age. Set `0` in tests for immediate drain.
-  DELIBERATE victim change in the same patch: `markDirty` keeps FIRST-dirty
-  order (no reorder on repeat marks), so the `MAX_DIRTY` victim is now the
-  longest-unflushed file, not the least-recently-written one — strictly more
-  correct, shipped unconditionally.
-- `flush-max-threads` (default 1) is REAL since `minecraft-0016`: one shared
-  bounded server-wide pool (daemon `linear-flush-*`, fixed size). `<=1` keeps
-  the serial loop byte-identical; `>1` shares one pool across all coordinators
-  with caller participation + join barrier.
-- `compression-workers` (default 0) is REAL since `minecraft-0018`: zstd
+- `flush-frequency` (default 10s) gates the age-based flush in
+  `minecraft-0012`: `flushDirty()` flushes only files whose first-dirty age is
+  `>=` frequency; younger files stay tracked for the next save. Eviction
+  (`close()`) forces all regardless of age; bound-pressure flush ignores age.
+  Set `0` in tests for immediate drain. `markDirty` keeps FIRST-dirty order (no
+  reorder on repeat marks), so the `MAX_DIRTY` victim is the longest-unflushed
+  file.
+- `flush-max-threads` (default 1) sizes the shared bounded server-wide pool in
+  `minecraft-0012` (daemon `linear-flush-*`, fixed size). `<=1` keeps the serial
+  loop; `>1` shares one pool across all coordinators with caller participation
+  + join barrier.
+- `compression-workers` (default 0) is wired in `minecraft-0013`: zstd
   `setWorkers(n)` on the flush stream (fresh stream per flush, setters before
-  first write). `0` = single-threaded (inert, preserves behaviour). Positive
-  sizes a worker pool for that flush. NATIVE-MEMORY CAUTION (agent 10 verified):
-  at level 22 a flush context is ~690 MB resident / ~5 GB VSZ and
-  `setWorkers(2)` adds ~3.2 GB VSZ for zero speedup (single 512 MiB job); at
-  level 1 the default job is 2 MiB so workers CAN parallelize (~+4 MB/worker).
-  NEVER use workers at high levels (`>= ~16`, single job, GBs reservation, no
-  gain); safe operating point is low level + workers. Level 22 + flush threads
-  `>=4` OOMs a 6 GiB container.
-- `long-distance-matching` (default 0) is REAL since `minecraft-0018`: zstd
-  `setLong(windowLog)` (LDM) on the flush stream. `0` = off (preserves
-  behaviour). Valid `10..27` (JNI caps at 27; out-of-range silently disables
-  LDM, we skip the call). LDM@L1 is cheap (+31 MB, proven) and decodes with
-  stock readers; reader `setLongMax(27)` ships with the writer (harmless no-op,
-  decoder default already 27) so any `<=27` frame decodes. NEVER `setWindowLog`
-  `28..31` without a released reader (old readers refuse with "requires too
-  much memory").
-- `log-flush-batches` remains inert (false = warn-only).
+  first write). `0` = single-threaded. Positive values size a worker pool for
+  that flush. NATIVE-MEMORY CAUTION: at level 22 a flush context is ~690 MB
+  resident / ~5 GB VSZ and `setWorkers(2)` adds ~3.2 GB VSZ for zero speedup
+  (single 512 MiB job); at level 1 the default job is 2 MiB so workers CAN
+  parallelize (~+4 MB/worker). Never use workers at high levels (`>= ~16`,
+  single job, GBs reservation, no gain); safe operating point is low level +
+  workers. Level 22 + flush threads `>= 4` OOMs a 6 GiB container.
+- `long-distance-matching` (default 0) is wired in `minecraft-0013`: zstd
+  `setLong(windowLog)` (LDM) on the flush stream. `0` = off. Valid `10..27`
+  (JNI caps at 27; out-of-range silently disables LDM, we skip the call).
+  LDM@L1 is cheap (+31 MB) and decodes with stock readers; the reader ships
+  `setLongMax(27)` with the writer so any `<= 27` frame decodes. Never
+  `setWindowLog` `28..31` without a released reader (old readers refuse with
+  "requires too much memory").
+- `log-flush-batches` remains inert: `false` keeps warn-only logging, no clamp
+  (boolean).
 - `flush-frequency < 1` logs
   `[region-format] linear.flush-frequency must be >= 1, got <v>. Falling back to 10.`
   An earlier revision also carried `@Constraints.Min(1)`, which made a value
   below 1 fail boot before the fallback could run. `paper-0009` removes that
-  annotation, so the fallback is the shipped behaviour. `paper-0012` follows
-  the same convention: none of the Linear global keys carry `@Constraints`,
-  all clamps live in `@PostProcess`.
+  annotation, so the fallback is the shipped behaviour. The consolidated
+  `paper-0008` follows the same convention: none of the Linear global keys carry
+  `@Constraints`, all clamps live in `@PostProcess`.
 - `flush-max-threads` keeps Kaiiju's relative-value semantics: a negative value
   means `availableProcessors + value`, floored at 1. So `-1` would mean all but
-  one core, if anything read it. Values `<=1` keep the current serial path.
+  one core. Values `<=1` keep the current serial path.
 - `compression-workers: 0` means serial (caller thread). Negative values log
   `[region-format] linear.compression-workers must be >= 0, got <v>. Falling back to 0.`
 - `long-distance-matching: 0` disables long-distance matching. Negative values
   log `[region-format] linear.long-distance-matching must be >= 0, got <v>. Falling back to 0.`
-- `log-flush-batches: false` keeps warn-only logging. No clamp (boolean).
 
 ## Log lines
 

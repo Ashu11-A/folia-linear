@@ -50,7 +50,7 @@ Key reference: [../docs/configuration.md](../docs/configuration.md).
 | New `r.X.Z.linear` files growing on writes | `ls <world>/region/*.linear \| wc -l` and `du -sb` after a save cycle and a restart | Writer dispatch routes through `extensionFor(format)`. Stock never emits that extension |
 | Linear superblock on disk | `head -c 8 <file>.linear \| od -A x -t x1z` starts with `c3 ff 13 18 3c ca 9d 9a`; the trailer repeats the same eight bytes | On-disk proof independent of the logs. Check head and tail |
 | Deferred flush behaviour | `ls -l --time-style=full-iso` across a save cycle: `.linear` mtimes advance on the save cadence, not on every edit | Matches the `LinearFlushCoordinator` design: dirty-tracked, `flushDirty()` on world save, no per-edit fsync storm |
-| Offline chunk-set equality after conversion | `convert.py verify <mca-tree> <mca-tree>` reports `total diffs=0` | Payload-level proof that the converter path preserves chunks |
+| Offline chunk-set equality after conversion | `convert.py verify <tree-a> <tree-b>` reports `total diffs=0` | Payload-level proof that the converter path preserves chunks |
 
 ### 3b. Config fallback lines
 
@@ -92,25 +92,26 @@ Field meanings, the flush event contract and troubleshooting are in
 
 Do not represent these as covered.
 
-1. **Hot read and write p99 are unmeasured.** No live timing or spark
-   comparison has been run on this build. Judge the rollout on warm-server p99,
-   not on cold-start numbers, which page-cache misses and zstd warmup distort.
-2. **The symlink guard has never fired live.** Static coverage only
-   (`BrokenSymlinkGuardTest`, fixtures plus a flag-by-format matrix). The first
-   live fire will halt the server. Treat it as a drill, not an outage.
-3. **Single node, local disk.** NFS, shared storage and two nodes against one
-   world directory are untested. Do not run two nodes against one world
-   directory.
-4. **The flush knobs are live, except batch logging.** `flush-frequency`
-   (age-based flush) and `flush-max-threads` (shared flush pool) are read;
-   only `log-flush-batches` remains inert (false = warn-only). Details in
-   `docs/configuration.md`.
-5. **Rung B needs your own stock jar.** `rollback.sh` defaults `--stock-jar` to
-   a placeholder path and aborts with instructions until you point it at a real
-   one. Rung A needs no extra jar.
-6. **Converter edge cases.** Zero-byte region files are skipped. Anvil-side
-   oversized chunks re-emit as `.mcc` sidecars on `linear2mca`, listed in the
-   manifest `sidecars` field. Confirm `total diffs=0` before trusting any
-   converted tree.
+- **Hot read and write p99 are unmeasured.** No live timing or spark
+  comparison has been run on this build. Judge the rollout on warm-server p99,
+  not on cold-start numbers, which page-cache misses and zstd warmup distort.
+- **The symlink guard has never fired live.** Static coverage only
+  (`BrokenSymlinkGuardTest`, fixtures plus a flag-by-format matrix). The first
+  live fire will halt the server. Treat it as a drill, not an outage.
+- **Single node, local disk.** NFS, shared storage and two nodes against one
+  world directory are untested. Do not run two nodes against one world
+  directory.
+- **The flush knobs are live, except batch logging.** `flush-frequency`
+  (age-based flush), `flush-max-threads` (shared flush pool),
+  `compression-workers` and `long-distance-matching` (zstd tuning) are read;
+  only `log-flush-batches` remains inert (false = warn-only). Details in
+  `docs/configuration.md`.
+- **Rung B needs your own stock jar.** `rollback.sh` defaults `--stock-jar` to
+  a placeholder path and aborts with instructions until you point it at a real
+  one. Rung A needs no extra jar.
+- **Converter edge cases.** Zero-byte region files are skipped. Anvil-side
+  oversized chunks re-emit as `.mcc` sidecars on `linear2mca`, listed in the
+  manifest `sidecars` field. Confirm `total diffs=0` before trusting any
+  converted tree.
 
 Full list: [../docs/limitations.md](../docs/limitations.md).

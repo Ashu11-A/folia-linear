@@ -11,7 +11,7 @@ for the full list of open questions.
 | Live SMP, all dimensions, level 1 | 24.99 GiB | 16.57 GiB | 33.7% |
 | Live SMP, Anvil to level 22 (offline rewrite) | 24.99 GiB | 11.04 GiB | 55.8% |
 | Live SMP region files, level 1 to 22 (offline) | 16.57 GiB | 11.04 GiB | 33.4% |
-| Stress sweep, recommended level 6 vs Anvil | 24.99 GiB | 13.87 GiB | 44.5% |
+| Stress sweep, recommended level 6 vs Anvil | 24.27 GiB | 13.86 GiB | 42.9% |
 | SYNTHETIC fixture tree, SMP-like data (129 MB) | 128,961,741 B | 52,163,783 B | 59.6% |
 | Soak world | Anvil baseline | ~30% of the bytes | ~70% |
 
@@ -74,7 +74,8 @@ Cost:
   `save-all` flush, and a green `status`.
 - The live flush cost at level 22 over a long soak has not been measured. Watch
   the save wall and tick p99 before making 22 a default. Soak new worlds at
-  level 1.
+  level 9 (the shipped default) or lower; level 6 stays the recommended
+  starting point.
 - Going back from 22 to 1 is a config flip. No rewrite is needed, because the
   header level byte is informational and decoding is level-independent.
 
@@ -104,8 +105,8 @@ Run against a 129 MB SMP-like fixture tree on the release-candidate jar:
 
 ## Test suites
 
-- 9066 tests green on the patched fork, 22 skipped, zero failures.
-- 70 Linear-specific tests in `LinearNmsTestSuite`.
+- `LinearNmsTestSuite`: 79 tests, 0 failures on the current tree (incl. 17
+  conversion-pipeline, 10 startup-conversion, 10 default-format, 3 save-drain).
 - Converter round-trip on fixtures: 107 files, 109,568 slots, zero diffs.
 - Builds are deterministic. The same source produced a byte-identical
   60,509,601 B paperclip jar on separate runs.
@@ -120,8 +121,8 @@ per-level docs: `versions/26.1.x/bench/level-0N.md`.
 | Level | Size | Saved vs #1 | Shutdown base / rc | Verdict |
 |---|---|---|---|---|
 | 1 | 16.58 GiB | — | 80.0s / 70.4s | ⚠️ |
-| 3 | 16.04 GiB | 3.30% | 80.3s / 72.5s | ⚠️ |
-| 6 | 13.87 GiB | 16.37% | 74.4s / 72.3s | ⚠️ |
+| 3 | 16.03 GiB | 3.30% | 80.3s / 72.5s | ⚠️ |
+| 6 | 13.86 GiB | 16.37% | 74.4s / 72.3s | ⚠️ |
 | 9 | 13.45 GiB | 18.86% | 77.2s / 72.4s | ⚠️ |
 | 12 | 13.21 GiB | 20.33% | 84.3s / 120.9s SIGKILL, 2047 lost | base ⚠️ / rc ❌ |
 | 15 | 12.86 GiB | ~22.4% | 121s SIGKILL / not run | base ❌ |
@@ -133,8 +134,10 @@ loss, reproduced 2/2. SIGKILL T+30 s loses ~100% of edited chunks pre-fix and
 could not be induced on the test workload. Levels 12 and above are not safe;
 level 6 is the recommended default.
 
-NOTE: v1.1.1 ships compression level 9 as the default; see
-[configuration.md](configuration.md).
+NOTE: v1.2.0 ships compression level 9 as the default; see
+[configuration.md](configuration.md). The sweep below stages a 24.27 GiB tree
+(CSV `bytes_anvil` constant); the full-tree numbers above use 24.99 GiB. Both
+anchors are exact for their tree; do not mix them.
 
 ## What is not measured
 

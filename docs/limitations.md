@@ -31,18 +31,16 @@ What this release does not cover. Read it before a rollout, not after.
 - There is no cold-tier archiver in this release, so archiver-related cautions
   from other work do not apply.
 
-## Inert configuration
+## Configuration wiring
 
 - `region-format.linear.flush-frequency`, `region-format.linear.flush-max-threads`,
-  `region-format.linear.compression-workers`,
-  `region-format.linear.long-distance-matching` and
-  `region-format.linear.log-flush-batches` are declared and validated. All but
-  `log-flush-batches` are wired at their defaults: the flush pool, the
-  age-based flusher and the zstd workers all read them
-  (`flush-max-threads <= 1` stays serial, `compression-workers: 0` stays
-  serial, LDM `0` stays off, log `false` stays warn-only). Only batch logging
-  is still a silent no-op. New worlds ship `LINEAR` at level 9. See
-  [configuration.md](configuration.md).
+  `region-format.linear.compression-workers` and
+  `region-format.linear.long-distance-matching` are declared, validated and
+  wired: the flush pool, the age-based flusher and the zstd workers all read
+  them (`flush-max-threads <= 1` stays serial, `compression-workers: 0` stays
+  serial, LDM `0` stays off). Only `region-format.linear.log-flush-batches`
+  is still a silent no-op (`false` = warn-only). New worlds ship `LINEAR` at
+  level 9. See [configuration.md](configuration.md).
 
 ## Rollback
 
@@ -54,11 +52,18 @@ What this release does not cover. Read it before a rollout, not after.
 
 ## Converter
 
-The conversion tool (`mca2linear`, `linear2mca`, `verify`) is **not part of this
-repository**. It lives outside the patch supplement, and the docs reference it
-because it produced the numbers in [benchmarks.md](benchmarks.md). The same
-applies to the release-candidate jar paths quoted in `release/RELEASE.md`: those
-are local build outputs, not repository contents.
+Two converters exist. Do not confuse them.
+
+- **Built-in startup conversion** (in this repository, `minecraft-0015` +
+  `minecraft-0016`): on boot, worlds whose active format resolves to LINEAR
+  convert leftover `.mca` files through a convert → validate → delete pipeline
+  (3 retries, protection halt on exhaustion). Explicit-ANVIL worlds never
+  convert.
+- **Offline tree converter** (`mca2linear`, `linear2mca`, `verify`): **not part
+  of this repository**. The docs reference it because it produced the numbers
+  in [benchmarks.md](benchmarks.md). The same applies to the
+  release-candidate jar paths quoted in `release/RELEASE.md`: those are local
+  build outputs, not repository contents.
 
 Known converter behaviour:
 

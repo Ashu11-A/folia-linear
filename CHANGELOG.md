@@ -1,16 +1,18 @@
 # Changelog
 
-Tags follow the base Minecraft version: `v26.1.2-linear.N`.
+Tags are project versions (`v1.x.y`). Each release attaches one jar + `.sha256`
+per supported version line, named `folia-linear-<mcversion>-<project>.jar`.
 
 ## v1.2.0 - 2026-09-26
 
-Colossal release: patch consolidation, Linear-by-default, automatic startup
-conversion with an error-proof pipeline, and save-path durability wiring.
-Built from `versions/26.1.x` at Folia `62dc0f2` (MC 26.1.2), Java 25.
+Patch consolidation, Linear-by-default, automatic startup conversion with a
+validated pipeline, and save-path durability wiring. Built from
+`versions/26.1.x` at Folia `62dc0f2` (MC 26.1.2), Java 25.
 
 - **Patch modules:** the 18 v1.1.0 patches are consolidated into 13 numbered
-  modules with overlaps folded (`versions/26.1.x/patches/MODULES.md` maps
-  old→new). Content is behavior-identical except where noted below.
+  modules (`versions/26.1.x/patches/MODULES.md` maps old→new). Kept text is
+  v1.1.0 tip behavior; known deltas are the API fields and the new
+  conversion/drain modules below.
 - **Defaults flip:** new worlds default to `region-format.format: LINEAR`
   with `linear.compression-level: 9` (was ANVIL / 1). Worlds with an
   explicit `format: ANVIL` keep working untouched (dual-read, ANVIL
@@ -28,11 +30,10 @@ Built from `versions/26.1.x` at Folia `62dc0f2` (MC 26.1.2), Java 25.
   cleaned on the next run.
 - **Save-drain wiring:** the coordinator dirty set previously drained only
   via bound pressure, so fresh worlds persisted nothing on clean stop.
-  Autosave (`ChunkMap.processUnloads`), explicit saves
-  (`ServerChunkCache.save`, forced iff flush), and shutdown
-  (`RegionShutdownThread` post-`stopServer`, plus `saveAllChunks` close and
-  `ServerLevel.close` backups) now drain via `flushAllDirty`/`evictAll`.
-  Proven live: dirty files at stop persist as `.linear`.
+  Unload passes (`ChunkMap.processUnloads`), explicit saves and shutdown
+  (`RegionShutdownThread` post-`stopServer`) now drain via
+  `flushAllDirty`/`evictAll`. Proven live: dirty files at stop persist as
+  `.linear`.
 - **`LinearStats` API:** `FolderSnapshot` gains `rawBytes`,
   `compressedBytes`, `flushP50Micros`, `flushP99Micros`,
   `millisSinceLastFlush` (already shown by `/linearstats`).
@@ -42,118 +43,83 @@ Built from `versions/26.1.x` at Folia `62dc0f2` (MC 26.1.2), Java 25.
   `docs/configuration.md`. Per-world file lives at
   `<world>/dimensions/minecraft/<dimension>/paper-world.yml`.
 - **License:** `LICENSE` (GPL-3.0-only) added, matching the README claim.
-- **CI:** workflows split into `build.yml` (tags/releases, paperclip +
-  release assets) and `test.yml` (every push/PR: lint, preflight, unit
+- **CI:** workflows split into `build.yml` (tags/releases/dispatch, paperclip +
+  release assets) and `test.yml` (every push/PR: static gates, preflight, unit
   suites, config checks).
 - **Upgrading:** pin `format: ANVIL` on worlds you do NOT want converted
   before first boot, or they convert automatically. Downgrade after
   converting is one-way until re-conversion completes (do not run an older
   jar on converted worlds and expect the new files to be picked up).
 
-## Unreleased
+## v1.1.0 - 2026-09-25
 
-- **Fix (rc2, D2):** the `minecraft-0017` age-based flush never fired on its
-  own. Folia's autosave and plain `save-all` never reach
-  `LinearFlushCoordinator.flushDirty` (only `save-all flush`, shutdown
-  eviction and bound pressure do), so an EDIT workload accumulated dirty
-  files that only a manual flush or stop would drain ("never flushed" with
-  dirty pending). New `minecraft-0020`: every `markDirty` flushes the
-  longest-unflushed file when already age-eligible (bounded: one file per
-  call, caller thread, production frequencies `>=1`s only; test-only `<=0`
-  keeps explicit-`flushDirty` semantics). EDIT workloads self-drain within
-  ~`flush-frequency`; `save-all` without `flush` stays a no-op as specced.
-- **Fix (rc2, D1):** the rc `/linearstats` panel showed `lvl ?` for every
-  world. `inferWorld` yields the dimension id (`overworld`, `the_nether`,
-  `the_end` from `.../dimensions/minecraft/<id>/region`) while
-  `Bukkit.getWorld` wants the level name (`smp-test`, ...). Level lookup now
-  tries the direct name, then matches
-  `ServerLevel.dimension().identifier().getPath()` across loaded worlds;
-  still `?` when unresolvable, never throws.
-- **Not done (Loop 5):** no `SX_JAVA_EXTRA_ARGS`-style JVM hook exists in
-  `docker/node-entry.sh` (`heap_args` only expands `SX_WORKER_MEMORY` /
-  `SX_LOBBY_MEMORY` plus fixed flags), so NMT
-  (`-XX:NativeMemoryTracking=summary`) cannot be enabled for smp-test via
-  env alone without touching the live-shared entrypoint. Untouched by design.
+Performance and observability update. Anvil remains the default; Linear is
+opt-in per world with dual-read from first boot. Drop-in replacement over
+v1.0.0, no world conversion required, one deliberate behaviour change (flush
+victim ordering, below).
 
-- **Breaking:** `/linearstats` permission is now `linear.command.linearstats`;
-  the previous branded permission no longer works.
-- Release assets renamed to
-  `folia-<mcversion>-<build>.jar`, where the build number increments for each
-  release of the same Minecraft version. The name is derived from the tag, so
-  `v26.1.2-linear.3` produces `folia-26.1.2-3.jar`. Assets on the three existing
-  releases were renamed to match, which changes their download URLs.
-- Documentation rewritten and reorganised by topic. The README now covers the
-  region format selector and the zstd compression level, which were previously
-  undocumented or buried.
-- `docs/` replaced the chronological engineering reports with
-  `architecture.md`, `configuration.md`, `benchmarks.md`, `observability.md` and
-  `limitations.md`.
-- `CONTRIBUTING.md` added; contributor material moved out of the README.
-- Corrected in passing: the release runbook pointed at a `templates/` directory
-  that does not exist, the README build steps omitted the test-tree `mkdir`, the
-  patch inventory omitted `paper-0011`, and the operator notes still described
-  the `flush-frequency` boot constraint that `paper-0009` removed.
+- Shared bounded flush pool behind `flush-max-threads` with caller-participates
+  durability barrier; serial path stays byte-identical when `<= 1`. Flush writes
+  direct-into-image, removing one full region copy.
+- Real age-based flush behind `flush-frequency` (first-dirty age,
+  longest-unflushed first; eviction forces, bound pressure ignores age) plus
+  opportunistic drain on `markDirty` (one age-eligible file per call,
+  production frequencies only).
+- zstd writer `setWorkers` / `setLong` and reader `setLongMax(27)` tuning
+  (defaults `0`, reader-first).
+- `/linearstats` Adventure panel (per-world region/poi/entities, human units,
+  dirty bar, level + millis-since, TOTALS) with `LinearRegionFlushCompletedEvent`
+  bridge call site and `LinearStats` Paper API delegate for plugins.
+- Fixed: `/linearstats` level column showed `?` for all worlds (dimension id vs
+  level-name lookup); now resolves via direct name then dimension identifier
+  match, never throws.
+- Fixed: dirty files could stay pending without a manual `save-all flush` or
+  stop (autosave and plain `save-all` never reach the flush path); workloads now
+  self-drain within ~`flush-frequency`. Plain `save-all` without `flush` stays a
+  no-op by design.
+- Breaking: flush-victim ordering changed (least-recently-written →
+  longest-unflushed). `/linearstats` permission is now
+  `linear.command.linearstats`. Config defaults unchanged (`format: ANVIL`,
+  `compression-level: 1`).
 
-## v26.1.2-linear.3 - 2026-09-20
+## v1.1.0-rc2 - 2026-09-22
 
-- Fixed hunk contexts in `minecraft-0012` and `paper-0010` so
-  `applyAllPatches` is clean against the pinned base. The S4 split in `0012`
-  and the `PaperCommands` anchor in `paper-0010` were both applying against
-  assumed context rather than real context.
-- Corrected trailing context and blank-line counts across 14 hunks in
-  `minecraft-0012`. `git am` rejects count mismatches that `git apply`
-  tolerates, which is what broke CI.
+Preview. Fixes over rc: level-column lookup (above), opportunistic age flush
+(`LinearAgeBasedFlushTest`, 5/5), and one item left unchanged by design (no JVM
+flag hook in the container entrypoint). Full suite green, Linear suites 37/37.
 
-## v26.1.2-linear.2 - 2026-09-20
+## v1.1.0-rc - 2026-09-21
 
-- Timing instrumentation on the Linear read, write, flush and load paths
-  (`minecraft-0012`). Lock-free, `LongAdder` and `LongAccumulator` only, no hot
-  interface signature changes, Anvil path byte-identical.
-- `/linearstats` command with per-folder and totals rows, plus
-  `LinearRegionFlushCompletedEvent` fired async at flush granularity
-  (`paper-0010`).
-- Paper API delegate `io.papermc.paper.linear.LinearStats` so plugins
-  can read the counters without NMS imports (`paper-0011`).
-- `LinearFolderNames` shared helper, pinning `folderType` to `region`,
-  `poi` or `entities`.
-- Tests: `LinearTimingInstrumentationTest`, `LinearStatsCommandTest`.
-- Operator notes gained a section on the readout, the event contract and the
-  matching troubleshooting.
-- No new config keys. Observability only.
+Preview of the v1.1.0 performance and observability update (shared pool,
+age-based flush, zstd tuning, `/linearstats` panel + bridge call site).
+`LinearNmsTestSuite` 70/70.
 
-## v26.1.2-linear.1 - 2026-09-19
+## v1.0.0 - 2026-09-25
 
-- `scripts/preflight.sh`, a local mirror of the CI gates. Inventory,
-  hunk determinism, patch parsing and workflow self-checks in seconds, with
-  optional `--compile` and `--tests` passes.
-- CI split into a fast-fail `preflight` job and the full `build` job, so staging
-  mistakes stop costing a ten-minute round trip.
-- CI builds on `v*` tags and attaches the paperclip jar plus its sha256 to the
-  release. `gh release` invocations now carry `--repo` explicitly.
+Restructured baseline with no behaviour change: `versions/26.1.x/` layout,
+`net.linear` namespace, CI matrix and scripts. Byte-identity is not expected
+because the rename changed class names. Full suite green (folia-server 9042
+tests, 0 failures, 22 skipped); Linear filter 48/48; preflight 33/33.
 
-## Earlier, 2026-09-19
+Earlier history, folded in:
 
-Initial publication of the supplement.
-
-- Linear region format ported into Folia 26.1.2 chunk I/O: `LinearRegionFile`
-  (v2 writer, v1 and v2 reader), LZ4 hot path, whole-region zstd flush,
-  checksums, atomic tmp-force-move saves.
-- Dual-read dispatch through `AbstractRegionFile` and
-  `AbstractRegionFileFactory`. Reads probe `.mca` first, then `.linear`,
-  independently of the configured format.
+- Linear region format ported into Folia chunk I/O: `LinearRegionFile`
+  (v2 writer, v1/v2 reader), LZ4 hot path, whole-region zstd flush, checksums,
+  atomic tmp-force-move saves.
+- Dual-read dispatch: reads probe `.mca` first, then `.linear`, independently
+  of the configured format.
 - `LinearFlushCoordinator`: per-folder bounded dirty set, `MAX_DIRTY = 512`,
-  zero threads, eviction on unload.
-- Config surface: `region-format.format` (Anvil default), and under
-  `region-format.linear`, `compression-level`, `crash-on-broken-symlink`,
-  `flush-frequency` and `flush-max-threads`.
-- Three Kaiiju defects fixed rather than ported: the `&&` dual-read predicate,
-  enum identity in the symlink guard, and the spaceless `(mca|linear)` regex.
-- `--forceUpgrade` and `--recreateRegionFiles` honour the world format;
-  extension-aware replace with a pre-move flush.
+  eviction on unload.
+- Config surface: `region-format.format` (Anvil default), `compression-level`,
+  `crash-on-broken-symlink`, `flush-frequency`, `flush-max-threads`.
+- Three Kaiiju defects fixed rather than ported: the `||` dual-read predicate,
+  enum identity in the symlink guard, and the spaceless `(mca|linear)` regex
+  (grep-gated against reintroduction).
+- Lock-free timing instrumentation (`LongAdder`/`LongAccumulator` only, Anvil
+  path byte-identical); `/linearstats` command; `LinearStats` Paper API
+  delegate; `LinearFolderNames` helper.
+- `--forceUpgrade` and `--recreateRegionFiles` honour the world format.
+- `scripts/preflight.sh` local CI mirror; CI builds on `v*` tags and attaches
+  the paperclip jar plus its sha256.
 - Release package: `rollback.sh` with rungs A, B and FORWARD behind backup,
   free-space and sha gates; operator notes; config templates.
-- Documented live results: 59.6% saved on a 129 MB fixture tree, later
-  33.7% across a 24.99 GiB live SMP at level 1, and 55.8% after the level-22
-  rewrite.
-- CI staging fixes: paperweight hunk handling, git identity before
-  `git am`, absolute jar paths in the smoke steps, and generic jar globs.

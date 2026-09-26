@@ -9,7 +9,7 @@ to work out why something behaves the way it does.
 Xymb Linear, version 2 on write, versions 1 and 2 accepted on read. Big-endian,
 byte-identical to the reference `linear.py`.
 
-```
+```text
 header (32 B)  int64  superblock 0xC3FF13183CCA9D9A
                uint8  version = 2
                int64  newest timestamp
@@ -84,7 +84,7 @@ dirty, so no acknowledged write is lost.
 
 - **One shared bounded pool.** A single static `ThreadPoolExecutor` (daemon
   `linear-flush-*` threads, fixed size = `flush-max-threads`) is shared
-  server-wide across all coordinators (`minecraft-0016`). A 3-world server has
+  server-wide across all coordinators (`minecraft-0012`). A 3-world server has
   9 coordinators (3 worlds x region/poi/entities) sharing one pool, not 9
   pools. Explicitly NOT a `ForkJoinPool` (managed-blocker compensation breaks
   the memory budget), NOT `invokeAll` (cancels on interrupt, truncating the
@@ -102,10 +102,10 @@ dirty, so no acknowledged write is lost.
 - **Eviction on unload.** `RegionFileStorage.close()` calls `evict(Path)`, which
   flushes anything still dirty and drops the registry entry, so worlds do not
   leak coordinators. `flush()`/`close()` snapshot the region cache under the
-  monitor and run I/O outside it (`minecraft-0013`; flushDirty/evict touch
+  monitor and run I/O outside it (`minecraft-0011`; flushDirty/evict touch
   only the coordinator set, verified safe).
 - Anvil keeps its per-write flush behaviour. Only Linear defers.
-- **`doFlush` memory (minecraft-0016).** Each LZ4 slot decompresses straight
+- **`doFlush` memory (minecraft-0012).** Each LZ4 slot decompresses straight
   into its final offset in `image` (absolute LZ4 calls, positions untouched).
   The old `plain[]` staging array is gone: peak direct residency is one region
   image (`TABLE_SIZE + totalRaw`), not two. The only heap scratch remains the
@@ -153,26 +153,22 @@ The port carries a grep gate for all three patterns (`|| !endsWith`,
 
 Applied in numeric order by paperweight, `minecraft-*` into
 `folia-server/minecraft-patches/features/` and `paper-*` into
-`folia-server/paper-patches/features/`.
+`folia-server/paper-patches/features/`. Full map:
+`versions/26.1.x/patches/MODULES.md`.
 
 | Patch | Contents |
 |---|---|
-| `minecraft-0009` | `LinearRegionFile`, `LinearDirectStreams`, `AbstractRegionFile`, `AbstractRegionFileFactory`, storage-side `RegionFileFormat`, `LinearFlushCoordinator`, `ZstdChunkCodec`, the dual-read probe, and the broken-symlink guard method |
-| `minecraft-0010` | `crash-on-broken-symlink` field plus the constructor chain through `RegionFileStorage`, `IOWorker`, `SimpleRegionStorage`, `EntityDataController`, `ChunkMap` and `PoiManager`; the two guard call sites; zstd-jni 1.5.6-8 dependency |
-| `minecraft-0011` | Recreate path honours the world format (`RecreatingSimpleRegionStorage`, extension-aware replace, pre-move flush); coordinator-aware batching in `MoonriseRegionFileIO`; `fromConfig()` single mapping point; oversized-chunk guard on both write paths; upgrade-rewrite entry un-stubbed |
-| `minecraft-0012` | Lock-free timing counters on the Linear read, write, flush and load paths, plus `linear$stats()` and `snapshots()`. No behaviour change, and the Anvil path stays byte-identical |
-| `paper-0008` | The `region-format` config blocks in `GlobalConfiguration` and `WorldConfiguration`, the config-side `RegionFileFormat` enum, and the dual-read test sources |
-| `paper-0009` | Removes `@Constraints.Min(1)` from `flush-frequency` so the documented fallback is reachable; world-loader wiring; upgrade un-stub |
-| `paper-0010` | `/linearstats` command, `LinearRegionFlushCompletedEvent`, the async bridge that fires it, and `LinearFolderNames` |
-| `paper-0011` | `io.papermc.paper.linear.LinearStats`, a JDK-only DTO so plugins can read stats without importing `net.linear` |
-| `paper-0012` | Inert global keys `compression-workers` (0), `long-distance-matching` (0/off), `log-flush-batches` (false) with `@PostProcess` clamps; `flush-max-threads <= 1` documented serial. No threads yet — "No threads" stays true |
-| `minecraft-0013` | `RegionFileStorage.flush()/close()` snapshot under the monitor, I/O outside it (flushDirty/evict verified to touch only the coordinator set). No behaviour change, Anvil path identical |
-| `minecraft-0014` | `moonrise$getRegionFileIfExists`/`getRegionFile` eviction `removeLast().close()` outside the monitor (remove under lock, close unlocked; open-once preserved). Level-22 eviction rewrite no longer blocks all I/O on the folder |
-| `minecraft-0015` | Loop-4 measurements: raw/compressed bytes, bucketed flush p50/p99, millis-since-last-flush; markDirty/cache hits-misses exposed (S8 blind-spot fix). LongAdder/LongAccumulator only, no pool re-cut of `recordFlush`. No threads — "No threads" stays true |
-| `minecraft-0016` | ONE shared bounded server-wide flush pool behind `flush-max-threads` (fixed daemon pool, caller participates + joins as durability barrier; NOT per-coordinator/ForkJoinPool/invokeAll/Moonrise pool; `<=1` serial byte-identical) + `doFlush` direct-into-image (removes one full region copy). "No threads" retired — one shared pool |
-| `minecraft-0017` | REAL age-based flush behind `flush-frequency` (only first-dirty age `>=` frequency flushes; evict forces, pressure ignores age) + FIRST-dirty ordering (LinkedHashMap, no reorder; DELIBERATE victim change least-recently-written → longest-unflushed, strictly more correct, unconditional) |
-| `minecraft-0018` | Writer `setWorkers(n)`/`setLong(w)` + reader `setLongMax(27)` (reader ships with writer; BOTH default 0 = inert; setters before first write; agent-10 numbers: JNI caps setLong at 27, decoder default 27, MT@22 zero speedup + ~690MB, LDM@L1 cheap; native-memory caution) |
-| `paper-0013` + `minecraft-0019` (PATCH8) | Coloured ALIGNED Adventure `/linearstats` panel (per-world region/poi/entities, human units, dirty-depth bar, per-world level + time-since-last-flush via m0015, TOTALS footer; empty-state line + permission kept) + missing bridge call site: `LinearFlushBridge#notifyFlushSync` (no Plugin, sync) called right after `flushDirty()` drains (NMS site in 0019, async `notifyFlush(Plugin)` unchanged); event finally fires |
+| `minecraft-0009` | Region format: `LinearRegionFile`, dispatch layer, coordinator, codec, dual-read probe, symlink guard, recreate/upgrade paths |
+| `minecraft-0010` | Observability: timing counters, `linear$stats()`, measurement fields |
+| `minecraft-0011` | Flush-unlock: snapshot under monitor, I/O outside it |
+| `minecraft-0012` | Flush coordinator: shared pool, age-based flush, opportunistic drain, direct-into-image, bridge call site |
+| `minecraft-0013` | zstd tuning: workers, LDM, reader window |
+| `minecraft-0014` + `paper-0010` | Defaults flip: ANVIL/1 → LINEAR/9 |
+| `minecraft-0015` + `paper-0011` | Startup conversion trigger |
+| `minecraft-0016` | Conversion pipeline: convert → validate → delete |
+| `minecraft-0017` | Save drain: autosave, explicit-save and shutdown hooks |
+| `paper-0008` | Config blocks, format enum, clamps, dual-read tests |
+| `paper-0009` | `/linearstats`, flush event + bridge, API delegate |
 
 lz4 is not pinned as a dependency. Vanilla and mache already supply
 `net.jpountz.lz4`, and pinning a second copy of the same package would duplicate
@@ -184,7 +180,7 @@ The surfaces most likely to break on a Folia update:
 
 - Moonrise chunk-system seams, `SimpleRegionStorage`, `RegionStorageUpgrader`.
 - Any `forceWrite` path, since Linear's durability contract differs from Anvil's.
-- The `build.gradle.kts.patch` hunk that `scripts/apply-deps-hunk.py` splices.
+- The `build.gradle.kts.patch` hunk that `versions/<line>/build-hunk.py` splices.
   It aborts on drift rather than producing a wrong file.
 - zstd-jni version bumps, which can move `Zstd.maxCompressionLevel()`.
 - `PaperCommands`, if upstream moves from the legacy static registry to

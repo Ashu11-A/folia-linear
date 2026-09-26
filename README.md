@@ -20,45 +20,50 @@ by default; any world can be pinned back to Anvil (`.mca`) per world.
 
 ## Measured results
 
-Stress sweep, full SMP world (~3.05M chunks, 24.99 GiB as Anvil), every level
-measured with 3 runs on the pre-fix jar (baseline) and 3 on the fixed jar (rc),
-plus SIGKILL durability rows. Raw rows:
+Stress sweep, full SMP world (24.27 GiB as Anvil per the sweep CSV constant),
+3 runs per level on the fixed jar (rc), plus SIGKILL durability rows. Raw rows:
 `versions/26.1.x/bench/stress-1-22.csv`. Method:
 [docs/benchmarks.md](docs/benchmarks.md).
 
-| Level | Size | Saved vs #1 | Shutdown base / rc | Verdict |
+| Level | Size | Saved vs Anvil | Shutdown (grace 120 s) | Chunks lost |
 |---|---|---|---|---|
-| 1 | 16.58 GiB | — (anchor) | 80.0s / 70.4s | ⚠️ works, little margin |
-| 3 | 16.04 GiB | 3.30% | 80.3s / 72.5s | ⚠️ works, little margin |
-| 6 | 13.87 GiB | 16.37% | 74.4s / 72.3s | ⚠️ works, little margin |
-| 9 | 13.45 GiB | 18.86% | 77.2s / 72.4s | ⚠️ works, little margin |
-| 12 | 13.21 GiB | 20.33% | 84.3s / **120.9s → SIGKILL, 2047 chunks lost** | base ⚠️ / **rc ❌** |
-| 15 | 12.86 GiB | ~22.4% | **121s → SIGKILL** / not run | **base ❌** |
+| Anvil | 24.27 GiB | — (anchor) | — | — |
+| 1 | 16.58 GiB | 31.7% | 70–75 s | 0 |
+| 3 | 16.03 GiB | 33.9% | 66–84 s | 0 |
+| 6 | 13.86 GiB | 42.9% | 71–74 s | 0 |
+| 9 | 13.45 GiB | 44.6% | 69–74 s | 0 |
+| 12 | 13.21 GiB | 45.6% | 120.9 s → SIGKILL | 2047 of 6144 |
+| 15 † | 12.86 GiB | 47.0% | 121.0 s → SIGKILL | unknown |
+| 22 †† | 11.04 GiB | ~54.5% | — | — |
 
-Shutdown is SIGTERM-to-exit against a 120 s grace period. ⚠️ here means the
-container peak touched ≥85% of its 6 GiB limit; every graceful shutdown saved
-every chunk at levels 1–9 on both jars.
+Shutdown is SIGTERM-to-exit against a 120 s grace period. Levels 1–9 shut down
+gracefully on all 12 rc runs with zero chunks lost.
+
+- † Level 15 ran on the pre-fix jar only; chunks-lost is unknown (the driver
+  died before verify completed).
+- †† Level 22 comes from the offline level-1-vs-22 rewrite, not the stress
+  sweep: no shutdown coverage, savings approximate.
+- Memory: 6 GiB container; cgroup peak touched the ceiling on every run, heap peak ≤3.0 GiB, 0 OOM kills. Tick p99 unmeasured on all runs.
 
 > **Do not use level 12 or above.** At 12 the fixed jar crossed the 120 s grace
-> period and was SIGKilled mid-flush, losing 2047 chunks (reproduced 2/2). At 15
-> even the pre-fix jar was killed the same way. The durability cliff for the
-> fixed jar lies between 9 and 12; for the pre-fix jar, between 12 and 15.
+> period and was SIGKilled mid-flush, losing 2047 chunks. The durability cliff
+> for the fixed jar lies between 9 and 12.
 
-> **Recommended: compression level 6.** Best shutdown numbers of the sweep on
-> both jars, 16.37% smaller than level 1 (44.5% smaller than Anvil), and nowhere
-> near any cliff.
+> **Recommended: compression level 6.** Tightest shutdown range of the sweep,
+> 42.9% smaller than Anvil, and nowhere near any cliff. Level 9 is the shipped
+> default.
 
 Durability under SIGKILL (T+30 s, full world, chunks edited then killed): the
-pre-fix jar loses ~100% of edited chunks at every level; the fixed jar
-(age-based flush + opportunistic flush) loses ~55% with a ~2-minute cutoff.
+fixed jar loses ~55% of edited chunks (3267–3486 of 6144 across 4 runs).
 Ungraceful kills still lose data — Linear is crash-safe, not crash-proof. OOM
 kills could not be induced on the test workload, so that row is unmeasured.
 
-Older offline numbers, kept for reference: level 1 converts 24.99 GiB Anvil to
-16.57 GiB (33.7% saved); level 22 reaches 11.04 GiB (55.8% vs Anvil). Offline
-conversion at 22 runs ~20 files/minute/worker, ~10× slower than level 1.
+Offline conversion at 22 runs ~20 files/minute/worker, ~10× slower than
+level 1. Full-tree numbers (24.99 GiB anchor) are in
+[docs/benchmarks.md](docs/benchmarks.md).
 
-Suite: 9066 tests green (22 skipped), 70 of them Linear-specific.
+Suite: `LinearNmsTestSuite` 79 tests green (incl. 17 conversion-pipeline, 10
+startup-conversion, 10 default-format, 3 save-drain).
 
 ## Requirements
 
@@ -79,11 +84,11 @@ scripts/build.sh
 
 The script clones the pinned Folia ref, stages `versions/<mc>/patches`,
 `tests/` and `build-hunk.py`, and runs `applyAllPatches` plus the full build.
-`build-hunk.py` splices the test source directory and the zstd-jni dependency
+`build-hunk.py` (in `versions/<line>/`) splices the test source directory and the zstd-jni dependency
 into Folia's own `build.gradle.kts.patch` (paperweight hunk convention); it
 aborts instead of guessing if the base file has drifted.
 
-Tagged pushes (`v1.x.y`) build on CI and attach one jar plus its sha256 per
+Tagged pushes (`v*`) build on CI and attach one jar plus its sha256 per
 supported version, named `folia-linear-<mc>-<project>.jar`. A manual
 `workflow_dispatch` input can limit a release to some versions.
 
@@ -187,7 +192,7 @@ Details in [docs/observability.md](docs/observability.md).
   `0010` observability incl. measurement, `0011` unlocked flush incl. eviction
   close, `0012` flush coordinator incl. shared pool + age flush + bridge,
   `0013` zstd workers/LDM tuning) and config/command surface (`paper-0008`
-  config incl. constraints + knob declarations, `paper-0009` linearstats incl.
+  config blocks + clamps, `paper-0009` linearstats incl.
   API delegate + stats panel). Module map: `patches/MODULES.md`.
 - `versions/26.1.x/tests/` - test sources copied into the fork's test tree.
 - `versions/26.1.x/bench/` - the stress harness, the per-run CSV and the

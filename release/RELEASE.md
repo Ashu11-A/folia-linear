@@ -21,7 +21,7 @@ Referenced but not included:
 
 | Artifact | Where |
 |---|---|
-| Paperclip jar | Built locally, or `folia-linear-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag (legacy `v<mc>-linear.N` tags carry `folia-<mcversion>-<build>.jar`) |
+| Paperclip jar | Built locally, or `folia-linear-<mcversion>-<project>.jar` from the GitHub release for a project `v*` tag |
 | Tree converter | `convert.py`, modes `mca2linear`, `linear2mca`, `verify`. Not part of this repository |
 
 ## 2. Version pins
@@ -38,11 +38,11 @@ the 26.1.x instantiation of that file; the workflow pins mirror it.
 | zstd-jni | `1.5.6-8` |
 | Config defaults | `format: LINEAR`, `compression-level: 9`, `crash-on-broken-symlink: true`, `flush-frequency: 10`, `flush-max-threads: 1` |
 
-The reference build produced a 60,509,601 B paperclip jar with sha256
-`3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c`, reproducible
-byte for byte across rebuilds. A CI release asset is a different artifact and
-therefore has a different sha: `folia-26.1.2-1.jar` is 60,511,732 B,
-`folia-26.1.2-3.jar` is 60,530,852 B. `rollback.sh --expected-sha` defaults to
+A v1.1.x-era local reference build produced a 60,509,601 B paperclip jar with
+sha256 `3d4713a0c78a68d01f33cc9f44685cdfbbcd1b508cb1033cd4366f62b3cd618c`,
+reproducible byte for byte across rebuilds. A CI release asset is a different
+artifact and therefore has a different sha: `folia-linear-26.1.2-1.2.0.jar` is
+60,570,058 B (see the v1.2.0 release). `rollback.sh --expected-sha` defaults to
 the local reference build, so pass the sha of whichever jar you actually
 deployed.
 
@@ -89,6 +89,9 @@ date -u +%FT%TZ > /backup/<world>/BACKUP_VERIFIED
 | `region-format.linear.crash-on-broken-symlink` | `true` | A broken `.linear` symlink halts the server by design |
 | `region-format.linear.flush-frequency` | `10` | Age-based flush gate. Below 1 logs an error and falls back to `10` |
 | `region-format.linear.flush-max-threads` | `1` | Shared flush pool size; `<=1` keeps the serial loop |
+| `region-format.linear.compression-workers` | `0` | zstd workers per flush; `0` = serial |
+| `region-format.linear.long-distance-matching` | `0` | zstd LDM windowLog; `0` = off |
+| `region-format.linear.log-flush-batches` | `false` | Inert; warn-only logging |
 
 The timing counters and `/linearstats` add no config keys.
 
@@ -99,20 +102,20 @@ Full reference: [../docs/configuration.md](../docs/configuration.md).
 Executed 2026-09-19 against the live files. The server itself was not booted by
 this runbook.
 
-1. **Config template renders.** Each block of the single snippet parses with
-   `yaml.safe_load`: pass. All keys present with ship defaults.
-2. **Script syntax.** `bash -n rollback.sh`: pass, exit 0, no output.
-3. **Converter smoke.** `convert.py --help`: pass. Modes `mca2linear`,
-   `linear2mca`, `verify`; flags `-t/--threads`, `-c/--compression-level`.
-4. **Rollback self-test.** `rollback.sh --help`, plus a rung A `--dry-run`
-   against a scratch worlds directory: pass. The gate correctly aborted without
-   `--backup-dir`; with a scratch backup marker it printed the planned edits and
-   changed nothing.
-5. **Jar reference check.** sha256 matched the expected value: pass.
+- **Config template renders.** Each block of the single snippet parses with
+  `yaml.safe_load`: pass. All keys present with ship defaults.
+- **Script syntax.** `bash -n rollback.sh`: pass, exit 0, no output.
+- **Converter smoke.** `convert.py --help`: pass. Modes `mca2linear`,
+  `linear2mca`, `verify`; flags `-t/--threads`, `-c/--compression-level`.
+- **Rollback self-test.** `rollback.sh --help`, plus a rung A `--dry-run`
+  against a scratch worlds directory: pass. The gate correctly aborted without
+  `--backup-dir`; with a scratch backup marker it printed the planned edits and
+  changed nothing.
+- **Jar reference check.** sha256 matched the expected value: pass.
 
 Abridged transcript:
 
-```
+```console
 $ bash -n rollback.sh && echo SYNTAX-OK
 SYNTAX-OK
 $ python3 convert.py --help
@@ -144,11 +147,11 @@ scripts/build.sh               # every folder in versions/
 ```
 
 Each line produces its own paperclip jar. Release tags carry the **project
-version only** (`v1.4.0`); one release attaches one jar + `.sha256` per
+version only** (`v1.2.0`); one release attaches one jar + `.sha256` per
 supported version, named `folia-linear-<mcversion>-<project>.jar` (so a
-`v1.4.0` release containing `26.1.x` at MC `26.1.2` ships
-`folia-linear-26.1.2-1.4.0.jar` + `.sha256`; a future `26.2.x` line at MC
-`26.2.1` would add `folia-linear-26.2.1-1.4.0.jar` + `.sha256` to the same
+`v1.2.0` release containing `26.1.x` at MC `26.1.2` ships
+`folia-linear-26.1.2-1.2.0.jar` + `.sha256`; a future `26.2.x` line at MC
+`26.2.1` would add `folia-linear-26.2.1-1.2.0.jar` + `.sha256` to the same
 release). Verify the sha256 shipped alongside the jar before
 `rollback.sh --expected-sha` will accept it.
 
@@ -156,10 +159,7 @@ To release only some folders (a fix that applies to one line), dispatch the
 workflow manually on the tag with the `versions` input:
 
 ```bash
-gh workflow run build.yml --ref v1.4.0 -f versions=26.1.x
+gh workflow run build.yml --ref v1.2.0 -f versions=26.1.x
 ```
 
-Pushed tags always release every version. The `v26.1.2-linear.1..3` tags and
-their `folia-<mcversion>-<build>.jar` assets stay as history; the workflow
-still understands that legacy tag shape, but new releases use the project
-scheme.
+Pushed tags always release every version.

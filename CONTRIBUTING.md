@@ -20,15 +20,16 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
 - `--compile` and `--tests` run Gradle in that directory and need network
   access. The plain run does not.
 - Exit code 0 means push-ready. Anything else means fix it locally first.
-- The CI `preflight` job runs the same checks; `build` only starts after it
-  passes.
+- The CI `static` job runs the same checks; `unit` and `config-check` only
+  run after it passes.
 
 ## Patch conventions
 
 - `minecraft-*.patch` goes to `folia-server/minecraft-patches/features/`,
   `paper-*.patch` to `folia-server/paper-patches/features/`. Numbering continues
-  the base fork's sequence, so a new NMS patch after `minecraft-0012` is
-  `minecraft-0013`.
+  the supplement's own sequence (`minecraft-0009`..`0017`, `paper-0008`..`0011`
+  in v1.2.0), so a new NMS patch after `minecraft-0017` is `minecraft-0018`.
+  The module map is `versions/<line>/patches/MODULES.md`.
 - Filenames are `<area>-<NNNN>-<Subject>.patch`, matching the patch's own
   `Subject:` line.
 - Patches apply through paperweight, which uses `git am`. `git am` rejects hunk
@@ -45,7 +46,7 @@ scripts/preflight.sh --tests    # the above, plus the Linear suites
 
 ## The build-file hunk
 
-`scripts/apply-deps-hunk.py` splices two things into Folia's own
+`versions/<line>/build-hunk.py` splices two things into Folia's own
 `folia-server/build.gradle.kts.patch`: the `net/linear` test source
 directory, and the zstd-jni dependency.
 
@@ -89,7 +90,7 @@ Porting checklist:
 
 ## Tests
 
-Test sources in `tests/` are copied into
+Test sources in `versions/<line>/tests/` are copied into
 `folia-server/src/test/java/net/linear/` during staging.
 
 - `LinearNmsTestSuite.java` is the suite wiring. The fork's Gradle task only
@@ -102,13 +103,13 @@ Test sources in `tests/` are copied into
 
 ## CI
 
-`.github/workflows/build.yml`, two jobs.
-
-- `preflight`: clones the pinned base, stages the supplement, and runs the
-  workflow self-checks. Minutes, no Gradle. Fails fast on staging bugs.
-- `build`: disk guard, Java 25, pinned clone, base-pin check, staging, git
-  identity for `git am`, `applyAllPatches`, full build, paperclip jar, Linear
-  suites, an Anvil boot smoke and a Linear boot smoke, then artifact upload.
+Two workflows. `test.yml` runs on every push/PR: `static` (YAML/shell validity,
+no-compile preflight gates), `unit` (staging, `applyAllPatches`, fork compile,
+`LinearNmsTestSuite`), `config-check`. `build.yml` runs on `v*` tags,
+published releases and manual dispatch: `discover` (version matrix), `build`
+(pinned clone, `applyAllPatches`, full build, paperclip jar, Linear suites,
+ANVIL + LINEAR boot smokes), `release` (jar + sha256 attached to the GitHub
+release on tags).
 
 Two self-checks exist because of past breakage and are enforced in both the
 workflow and `preflight.sh`:
@@ -120,13 +121,13 @@ workflow and `preflight.sh`:
 ## Cutting a release
 
 1. Preflight green, then push to `main`.
-2. Tag `v26.1.2-linear.N` and push the tag.
-3. The tag push triggers the build, which attaches `folia-<mcversion>-<build>.jar`
-   and its sha256 to the GitHub release. Both names are derived from the tag,
-   so `v26.1.2-linear.3` produces `folia-26.1.2-3.jar`. A tag that does not
-   match `v<mcversion>-linear.<build>` fails the attach step on purpose.
-4. Update `CHANGELOG.md` in the same change that introduces the behaviour, not
-   at tag time.
+2. Tag `v1.x.y` and push the tag.
+3. The tag push triggers `build.yml`, which attaches
+   `folia-linear-<mcversion>-<project>.jar` and its sha256 to the GitHub
+   release (one pair per supported version line). `v1.2.0` produces
+   `folia-linear-26.1.2-1.2.0.jar`.
+Update `CHANGELOG.md` in the same change that introduces the behaviour, not
+at tag time.
 
 ## Documentation
 
